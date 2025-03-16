@@ -1,7 +1,9 @@
 import { Anthropic } from "@anthropic-ai/sdk";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
+import type {
+  MessageParam,
+  Tool,
+} from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import readline from "readline/promises";
 import { BufferMemory } from "langchain/memory";
 import { ChatAnthropic } from "@langchain/anthropic";
@@ -10,7 +12,6 @@ import {
   type ConnectionOptions,
 } from "../shared/connector/connector";
 import { BaseMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
-import { AntTool } from "../shared/tools/tool";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 if (!ANTHROPIC_API_KEY) {
@@ -23,8 +24,7 @@ export class AntClient {
   private anthropic: Anthropic;
   private model: ChatAnthropic;
   private mcp: Client;
-  private transport: Transport | null = null;
-  private tools: AntTool[] = [];
+  private tools: Tool[] = [];
   private chatHistory: BaseMessage[] = [];
   private connector: Connector = new Connector();
 
@@ -56,12 +56,11 @@ export class AntClient {
       const toolsResult = await this.mcp.listTools();
       // Convert MCP tools to LangChain compatible format
       this.tools = toolsResult.tools.map((tool) => {
-        return new AntTool(
-          url,
-          tool.name,
-          tool.description || "",
-          tool.inputSchema,
-        );
+        return {
+          name: tool.name,
+          description: tool.description,
+          input_schema: tool.inputSchema,
+        };
       });
 
       console.log(
