@@ -1,28 +1,16 @@
 import { Anthropic } from "@anthropic-ai/sdk";
-import { execSync } from "child_process";
-import type {
-  MessageParam,
-  Tool,
-} from "@anthropic-ai/sdk/resources/messages/messages.mjs";
+import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import readline from "readline/promises";
-import { ConversationChain } from "langchain/chains";
 import { BufferMemory } from "langchain/memory";
 import { ChatAnthropic } from "@langchain/anthropic";
 import {
   Connector,
   type ConnectionOptions,
 } from "../shared/connector/connector";
-import {
-  ChatPromptTemplate,
-  HumanMessagePromptTemplate,
-  AIMessagePromptTemplate,
-  SystemMessagePromptTemplate,
-} from "@langchain/core/prompts";
 import { BaseMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
+import { AntTool } from "../shared/tools/tool";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 if (!ANTHROPIC_API_KEY) {
@@ -36,7 +24,7 @@ export class AntClient {
   private model: ChatAnthropic;
   private mcp: Client;
   private transport: Transport | null = null;
-  private tools: Tool[] = [];
+  private tools: AntTool[] = [];
   private chatHistory: BaseMessage[] = [];
   private connector: Connector = new Connector();
 
@@ -56,24 +44,24 @@ export class AntClient {
     this.mcp = new Client({ name: "ant-client", version: ANT_VERSION });
   }
 
-  async connectToServer(serverScriptPath: string) {
+  async connectToServer(url: string, type: "sse" | "stdio") {
     const opts: ConnectionOptions = {
-      type: "sse",
-      url: serverScriptPath,
+      type: type,
+      url: url,
       appName: "ant",
       appVersion: "1.0.0",
     };
     try {
       this.mcp = await this.connector.connect(opts);
       const toolsResult = await this.mcp.listTools();
-
       // Convert MCP tools to LangChain compatible format
       this.tools = toolsResult.tools.map((tool) => {
-        return {
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.inputSchema,
-        };
+        return new AntTool(
+          url,
+          tool.name,
+          tool.description || "",
+          tool.inputSchema,
+        );
       });
 
       console.log(
