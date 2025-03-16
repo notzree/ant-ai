@@ -36,11 +36,7 @@ export class AntClient {
       if (!isJs && !isPy) {
         throw new Error("Server script must be a .js or .py file");
       }
-      // const command = isPy
-      //   ? process.platform === "win32"
-      //     ? "python"
-      //     : "python3"
-      //   : process.execPath;
+
       let command: string;
       let args: string[] = [];
       if (isPy) {
