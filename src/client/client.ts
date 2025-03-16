@@ -13,6 +13,10 @@ import { ConversationChain } from "langchain/chains";
 import { BufferMemory } from "langchain/memory";
 import { ChatAnthropic } from "@langchain/anthropic";
 import {
+  Connector,
+  type ConnectionOptions,
+} from "../shared/connector/connector";
+import {
   ChatPromptTemplate,
   HumanMessagePromptTemplate,
   AIMessagePromptTemplate,
@@ -34,6 +38,7 @@ export class AntClient {
   private transport: Transport | null = null;
   private tools: Tool[] = [];
   private chatHistory: BaseMessage[] = [];
+  private connector: Connector = new Connector();
 
   constructor() {
     this.anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
@@ -52,33 +57,14 @@ export class AntClient {
   }
 
   async connectToServer(serverScriptPath: string) {
+    const opts: ConnectionOptions = {
+      type: "sse",
+      url: serverScriptPath,
+      appName: "ant",
+      appVersion: "1.0.0",
+    };
     try {
-      const isJs = serverScriptPath.endsWith(".js");
-      const isPy = serverScriptPath.endsWith(".py");
-      if (!isJs && !isPy) {
-        throw new Error("Server script must be a .js or .py file");
-      }
-
-      let command: string;
-      let args: string[] = [];
-      if (isPy) {
-        try {
-          const uvPath = execSync("which uv").toString().trim();
-          command = uvPath;
-          args = ["run", "--with", "mcp[cli]", "mcp", "run"];
-        } catch (e) {
-          throw new Error("uv is not installed or not in PATH");
-        }
-      } else {
-        command = process.execPath;
-      }
-
-      this.transport = new StdioClientTransport({
-        command,
-        args: args.concat([serverScriptPath]),
-      });
-
-      await this.mcp.connect(this.transport);
+      this.mcp = await this.connector.connect(opts);
       const toolsResult = await this.mcp.listTools();
 
       // Convert MCP tools to LangChain compatible format

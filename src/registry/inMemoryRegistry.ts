@@ -1,10 +1,11 @@
 import type { Registry } from "./registry";
-import { FakeTool, type AntTool } from "./tool";
+import type { AntTool } from "../shared/tools/tool";
+import { FakeTool } from "../shared/tools/fakeTool";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { Document } from "langchain/document";
 import { OpenAIEmbeddings } from "@langchain/openai";
 
-export class LocalRegistry implements Registry {
+export class inMemoryRegistry implements Registry {
   private vectorStore: MemoryVectorStore | null = null;
   private embeddings: OpenAIEmbeddings;
   private tools: Map<string, AntTool> = new Map();
@@ -177,7 +178,7 @@ export class LocalRegistry implements Registry {
 // Example usage
 async function runExample() {
   try {
-    const registry = new LocalRegistry();
+    const registry = new inMemoryRegistry();
     await registry.initialize();
 
     // Add some tools
