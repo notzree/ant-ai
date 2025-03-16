@@ -1,9 +1,9 @@
 import type { Registry } from "./registry";
-import type { AntTool } from "../shared/tools/tool";
-import { FakeTool } from "../shared/tools/fakeTool";
+import { AntTool } from "../shared/tools/tool";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { Document } from "langchain/document";
 import { OpenAIEmbeddings } from "@langchain/openai";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 export class inMemoryRegistry implements Registry {
   private vectorStore: MemoryVectorStore | null = null;
@@ -27,6 +27,21 @@ export class inMemoryRegistry implements Registry {
     }
   }
 
+  public async addServer(
+    client: Client,
+    serverUrl: string,
+  ): Promise<AntTool[]> {
+    const tools = await AntTool.FromClient(client, serverUrl);
+    const result = new Array(tools.length);
+
+    const promises = tools.map(async (tool, index) => {
+      result[index] = await this.addTool(tool);
+    });
+
+    await Promise.all(promises);
+    return result;
+  }
+
   /**
    * Add a tool to the vector store
    * @param tool - The tool to add
@@ -37,19 +52,14 @@ export class inMemoryRegistry implements Registry {
       await this.initialize();
     }
 
-    // Ensure the tool has an ID
-    if (!tool.id) {
-      tool.id = this.generateId();
-    }
-
     // Store the tool in our Map for quick retrieval
-    this.tools.set(tool.id, tool);
+    this.tools.set(tool.serverUrl, tool);
 
     // Create a document for the vector store
     const document = new Document({
       pageContent: `${tool.name}: ${tool.description}`,
       metadata: {
-        id: tool.id,
+        serverUrl: tool.serverUrl,
         name: tool.name,
         toolData: JSON.stringify(tool), // Store the full tool data as JSON
       },
@@ -57,25 +67,25 @@ export class inMemoryRegistry implements Registry {
 
     // Add to vector store
     await this.vectorStore!.addDocuments([document]);
-    console.log(`Tool added: ${tool.name} (ID: ${tool.id})`);
+    console.log(`Tool added: ${tool.name} (ID: ${tool.name})`);
 
     return tool;
   }
 
   /**
    * Delete a tool by ID
-   * @param id - The ID of the tool to delete
+   * @param name - The ID of the tool to delete
    * @returns boolean indicating success
    */
-  public async deleteTool(id: string): Promise<boolean> {
-    if (!this.vectorStore || !this.tools.has(id)) {
-      console.log(`Tool with ID ${id} not found`);
+  public async deleteTool(name: string): Promise<boolean> {
+    if (!this.vectorStore || !this.tools.has(name)) {
+      console.log(`Tool with ID ${name} not found`);
       return false;
     }
 
     // Remove from our tools Map
-    const tool = this.tools.get(id);
-    this.tools.delete(id);
+    const tool = this.tools.get(name);
+    this.tools.delete(name);
 
     // For in-memory vector store, we need to recreate it without the deleted document
     // since MemoryVectorStore doesn't support direct deletion
@@ -88,7 +98,7 @@ export class inMemoryRegistry implements Registry {
           new Document({
             pageContent: `${tool.name}: ${tool.description}`,
             metadata: {
-              id: tool.id,
+              serverUrl: tool.serverUrl,
               name: tool.name,
               toolData: JSON.stringify(tool),
             },
@@ -97,26 +107,8 @@ export class inMemoryRegistry implements Registry {
       this.embeddings,
     );
 
-    console.log(`Tool deleted: ${tool?.name} (ID: ${id})`);
+    console.log(`Tool deleted: ${tool?.name}`);
     return true;
-  }
-
-  /**
-   * Delete a tool by name
-   * @param name - The name of the tool to delete
-   * @returns boolean indicating success
-   */
-  public async deleteToolByName(name: string): Promise<boolean> {
-    // Find the tool with the given name
-    const tool = Array.from(this.tools.values()).find((t) => t.name === name);
-
-    if (!tool) {
-      console.log(`Tool with name ${name} not found`);
-      return false;
-    }
-
-    // Delete by ID
-    return this.deleteTool(tool.id);
   }
 
   /**
@@ -156,23 +148,6 @@ export class inMemoryRegistry implements Registry {
   public async listTools(): Promise<AntTool[]> {
     return Promise.resolve(Array.from(this.tools.values()));
   }
-
-  /**
-   * Get a specific tool by ID
-   * @param id - The ID of the tool to get
-   * @returns The tool or undefined if not found
-   */
-  public getToolById(id: string): AntTool | undefined {
-    return this.tools.get(id);
-  }
-
-  /**
-   * Generate a simple ID
-   * @returns A unique ID
-   */
-  private generateId(): string {
-    return `tool_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  }
 }
 
 // Example usage
@@ -183,47 +158,56 @@ async function runExample() {
 
     // Add some tools
     await registry.addTool(
-      new FakeTool(
+      new AntTool(
         "tool1",
         "TextSummarizer",
         "Summarizes long text into concise bullet points.",
-        "https://example.com/text-summarization",
+        {},
       ),
     );
 
     await registry.addTool(
-      new FakeTool(
+      new AntTool(
         "tool2",
         "ImageAnalyzer",
         "Analyzes images to extract objects, text, and sentiment.",
-        "https://example.com/image-analysis",
+        {},
       ),
     );
 
     await registry.addTool(
-      new FakeTool(
+      new AntTool(
         "tool3",
         "DataVisualizer",
         "Creates charts and graphs from tabular data.",
-        "https://example.com/data-visualization",
+        {},
       ),
     );
 
     await registry.addTool(
-      new FakeTool(
+      new AntTool(
         "tool4",
         "SentimentAnalyzer",
         "Analyzes text to determine sentiment.",
-        "https://example.com/sentiment-analysis",
+        {},
       ),
     );
 
     await registry.addTool(
-      new FakeTool(
+      new AntTool(
         "tool5",
         "TextSummarizer",
         "Summarizes long texts into concise summaries.",
-        "https://example.com/text-summarization",
+        {},
+      ),
+    );
+
+    await registry.addTool(
+      new AntTool(
+        "tool6",
+        "TextSummarizer",
+        "Summarizes long texts into concise summaries.",
+        {},
       ),
     );
 
@@ -234,12 +218,7 @@ async function runExample() {
       console.log(`\n--- Result ${i + 1} ---`);
       console.log(`Name: ${tool.name}`);
       console.log(`Description: ${tool.description}`);
-      console.log(`ID: ${tool.id}`);
     });
-
-    // Delete a tool by name
-    console.log("\nDeleting DataVisualizer tool:");
-    await registry.deleteToolByName("DataVisualizer");
 
     // Search again
     console.log("\nSearching again after deletion:");
