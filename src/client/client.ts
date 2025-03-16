@@ -9,24 +9,46 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import readline from "readline/promises";
-import dotenv from "dotenv";
+import { ConversationChain } from "langchain/chains";
+import { BufferMemory } from "langchain/memory";
+import { ChatAnthropic } from "@langchain/anthropic";
+import {
+  ChatPromptTemplate,
+  HumanMessagePromptTemplate,
+  AIMessagePromptTemplate,
+  SystemMessagePromptTemplate,
+} from "@langchain/core/prompts";
+import { BaseMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 if (!ANTHROPIC_API_KEY) {
   throw new Error("ANTHROPIC_API_KEY is not set");
 }
+const ANT_VERSION = process.env.ANT_VERSION || "1.0.0";
 
 export class AntClient {
-  private mcp: Client;
+  private memory: BufferMemory;
   private anthropic: Anthropic;
+  private model: ChatAnthropic;
+  private mcp: Client;
   private transport: Transport | null = null;
   private tools: Tool[] = [];
+  private chatHistory: BaseMessage[] = [];
 
   constructor() {
-    this.anthropic = new Anthropic({
-      apiKey: ANTHROPIC_API_KEY,
+    this.anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+    this.model = new ChatAnthropic({
+      anthropicApiKey: ANTHROPIC_API_KEY,
+      modelName: "claude-3-5-sonnet-20241022",
+      temperature: 0.7,
     });
-    this.mcp = new Client({ name: "mcp-client-cli", version: "1.0.0" });
+
+    this.memory = new BufferMemory({
+      memoryKey: "chat_history",
+      returnMessages: true,
+    });
+
+    this.mcp = new Client({ name: "ant-client", version: ANT_VERSION });
   }
 
   async connectToServer(serverScriptPath: string) {
@@ -58,6 +80,8 @@ export class AntClient {
 
       await this.mcp.connect(this.transport);
       const toolsResult = await this.mcp.listTools();
+
+      // Convert MCP tools to LangChain compatible format
       this.tools = toolsResult.tools.map((tool) => {
         return {
           name: tool.name,
@@ -65,6 +89,7 @@ export class AntClient {
           input_schema: tool.inputSchema,
         };
       });
+
       console.log(
         "Connected to server with tools:",
         this.tools.map(({ name }) => name),
@@ -74,61 +99,101 @@ export class AntClient {
       throw e;
     }
   }
+
   async processQuery(query: string) {
-    const messages: MessageParam[] = [
-      {
-        role: "user",
-        content: query,
-      },
-    ];
+    try {
+      // Get chat history from memory
+      const memoryResult = await this.memory.loadMemoryVariables({});
+      const chatHistoryMessages = memoryResult.chat_history || [];
 
-    const response = await this.anthropic.messages.create({
-      model: "claude-3-5-sonnet-20241022",
-      max_tokens: 1000,
-      messages,
-      tools: this.tools,
-    });
+      // Convert chat history to MessageParam format for Anthropic API
+      const messages: MessageParam[] = [
+        ...chatHistoryMessages.map((msg: BaseMessage) => ({
+          role: msg._getType() === "human" ? "user" : "assistant",
+          content: msg.content,
+        })),
+        { role: "user", content: query },
+      ];
 
-    const finalText = [];
-    const toolResults = [];
+      // Add the user's query to chat history
+      this.chatHistory.push(new HumanMessage(query));
 
-    for (const content of response.content) {
-      if (content.type === "text") {
-        finalText.push(content.text);
-      } else if (content.type === "tool_use") {
-        const toolName = content.name;
-        const toolArgs = content.input as { [x: string]: unknown } | undefined;
+      const response = await this.anthropic.messages.create({
+        model: "claude-3-5-sonnet-20241022",
+        max_tokens: 1000,
+        messages,
+        tools: this.tools,
+      });
 
-        const result = await this.mcp.callTool({
-          name: toolName,
-          arguments: toolArgs,
-        });
-        toolResults.push(result);
-        finalText.push(
-          `[Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}]`,
-        );
+      const finalText: string[] = [];
+      const toolCalls: { name: string; input: any; output: any }[] = [];
 
-        messages.push({
-          role: "user",
-          content: result.content as string,
-        });
+      // Process response and handle tool calls
+      for (const content of response.content) {
+        if (content.type === "text") {
+          finalText.push(content.text);
+        } else if (content.type === "tool_use") {
+          const toolName = content.name;
+          const toolArgs = content.input as
+            | { [x: string]: unknown }
+            | undefined;
 
-        const response = await this.anthropic.messages.create({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 1000,
-          messages,
-        });
-        if (response == null || response.content.length === 0) {
-          throw new Error("Failed to generate response");
+          finalText.push(
+            `[Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}]`,
+          );
+          const result = await this.mcp.callTool({
+            name: toolName,
+            arguments: toolArgs,
+          });
+
+          // Record tool call for memory
+          toolCalls.push({
+            name: toolName,
+            input: toolArgs,
+            output: result.content,
+          });
+
+          // Add tool result as user message (following Claude's expected format)
+          messages.push({
+            role: "user",
+            content: result.content as string,
+          });
+
+          // Get response to tool result
+          const toolResponse = await this.anthropic.messages.create({
+            model: "claude-3-5-sonnet-20241022",
+            max_tokens: 1000,
+            messages,
+          });
+
+          if (toolResponse && toolResponse.content.length > 0) {
+            const toolResponseText =
+              toolResponse.content[0].type === "text"
+                ? toolResponse.content[0].text
+                : "";
+            finalText.push(toolResponseText);
+          }
         }
-        finalText.push(
-          response.content[0].type === "text" ? response.content[0].text : "",
-        );
       }
-    }
 
-    return finalText.join("\n");
+      const assistantResponse = finalText.join("\n");
+
+      // Add assistant's response to chat history
+      this.chatHistory.push(new AIMessage(assistantResponse));
+
+      // Save the updated chat history to memory
+      await this.memory.saveContext(
+        { input: query },
+        { output: assistantResponse },
+      );
+
+      return assistantResponse;
+    } catch (error) {
+      console.error("Error processing query:", error);
+      return `Error: ${error.message}`;
+    }
   }
+
   async chatLoop() {
     const rl = readline.createInterface({
       input: process.stdin,
@@ -136,7 +201,7 @@ export class AntClient {
     });
 
     try {
-      console.log("\nMCP Client Started!");
+      console.log("\nMCP Client Started with persistent memory!");
       console.log("Type your queries or 'quit' to exit.");
 
       while (true) {
@@ -148,6 +213,7 @@ export class AntClient {
         console.log("\n" + response);
       }
     } finally {
+      console.log("exiting...");
       rl.close();
     }
   }
