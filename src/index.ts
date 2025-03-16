@@ -9,9 +9,6 @@ async function main() {
   }
   const mcpClient = new AntClient();
   try {
-    if (!process.argv[2]) {
-      throw new Error("Server script path is required");
-    }
     await mcpClient.connectToServer(process.argv[2]);
     await mcpClient.chatLoop();
   } finally {
