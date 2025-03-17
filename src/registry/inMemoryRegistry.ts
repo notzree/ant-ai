@@ -3,11 +3,11 @@ import { AntTool } from "../shared/tools/tool";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { Document } from "langchain/document";
 import { OpenAIEmbeddings } from "@langchain/openai";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   Connector,
   type ConnectionOptions,
 } from "../shared/connector/connector";
+
 export class inMemoryRegistry implements Registry {
   private vectorStore: MemoryVectorStore | null = null;
   private embeddings: OpenAIEmbeddings;
@@ -34,6 +34,9 @@ export class inMemoryRegistry implements Registry {
     serverUrl: string,
     type: "stdio" | "sse",
   ): Promise<AntTool[]> {
+    if (!this.vectorStore) {
+      throw new Error("Vector store not initialized");
+    }
     const connector = new Connector();
     const opts: ConnectionOptions = {
       type: type,
@@ -160,52 +163,3 @@ export class inMemoryRegistry implements Registry {
     return Promise.resolve(Array.from(this.tools.values()));
   }
 }
-
-// Example usage
-async function runExample() {
-  try {
-    const registry = new inMemoryRegistry();
-    await registry.initialize();
-    const connector = new Connector();
-    const opts: ConnectionOptions = {
-      type: "sse",
-      url: "https://mcp.composio.dev/notion/few-sticky-animal-ZVQ1XF",
-      appName: "ant",
-      appVersion: "1.0.0",
-    };
-    const client = await connector.connect(opts);
-    await registry.addServer(
-      client,
-      "https://mcp.composio.dev/notion/few-sticky-animal-ZVQ1XF",
-    );
-
-    // Search for tools
-    console.log("\nSearching for analysis tools:");
-    const analysisTools = await registry.queryTools("analyze data", 2);
-    analysisTools.forEach((tool, i) => {
-      console.log(`\n--- Result ${i + 1} ---`);
-      console.log(`Name: ${tool.name}`);
-      console.log(`Description: ${tool.description}`);
-    });
-
-    // Search again
-    console.log("\nSearching again after deletion:");
-    const remainingTools = await registry.queryTools("visualize", 2);
-    remainingTools.forEach((tool, i) => {
-      console.log(`\n--- Result ${i + 1} ---`);
-      console.log(`Name: ${tool.name}`);
-      console.log(`Description: ${tool.description}`);
-    });
-
-    // List all tools
-    console.log("\nAll remaining tools:");
-    const allTools = await registry.listTools();
-    allTools.forEach((tool, i) => {
-      console.log(`${i + 1}. ${tool.name} (${tool.id})`);
-    });
-  } catch (error) {
-    console.error("Error:", error);
-  }
-}
-
-// runExample();

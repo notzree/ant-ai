@@ -12,19 +12,7 @@ async function main() {
   }
   const registry = new inMemoryRegistry();
   await registry.initialize();
-  await registry.addServer(
-    "https://mcp.composio.dev/browserbase_tool/few-sticky-animal-ZVQ1XF",
-    "sse",
-  );
-  await registry.addServer(
-    "https://mcp.composio.dev/google_maps/few-sticky-animal-ZVQ1XF",
-    "sse",
-  );
-  await registry.addServer(
-    "https://mcp.composio.dev/notion/few-sticky-animal-ZVQ1XF",
-    "sse",
-  );
-
+  å;
   const mcpClient = new AntClient(registry);
   try {
     const url = process.argv[2] || "";
