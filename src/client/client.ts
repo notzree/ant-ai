@@ -27,7 +27,7 @@ export class AntClient {
   private anthropic: Anthropic;
   private registry: Registry;
   private model: ChatAnthropic;
-  private mcp: Client;
+  private mcpClients: Client[] = [];
   private availableTools: Tool[] = [];
   private chatHistory: BaseMessage[] = [];
   private connector: Connector = new Connector();
@@ -45,8 +45,6 @@ export class AntClient {
       memoryKey: "chat_history",
       returnMessages: true,
     });
-
-    this.mcp = new Client({ name: "ant-client", version: ANT_VERSION });
   }
 
   async connectToServer(url: string, type: "sse" | "stdio") {
@@ -54,26 +52,28 @@ export class AntClient {
       type: type,
       url: url,
       appName: "ant",
-      appVersion: "1.0.0",
+      appVersion: ANT_VERSION,
     };
     try {
-      this.mcp = await this.connector.connect(opts);
-      const toolsResult = await this.mcp.listTools();
-      // Convert MCP tools to LangChain compatible format
-      this.availableTools = toolsResult.tools.map((tool) => {
-        return {
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.inputSchema,
-        };
-      });
+      const mcpClient = await this.connector.connect(opts);
+      this.mcpClients.push(mcpClient);
+      
+      const toolsResult = await mcpClient.listTools();
+      // Add new tools to available tools
+      const newTools = toolsResult.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.inputSchema,
+      }));
+      
+      this.availableTools.push(...newTools);
 
       console.log(
-        "Connected to server with tools:",
-        this.availableTools.map(({ name }) => name),
+        `Connected to server ${url} with tools:`,
+        newTools.map(({ name }) => name),
       );
     } catch (e) {
-      console.log("Failed to connect to MCP server: ", e);
+      console.log(`Failed to connect to MCP server ${url}: `, e);
       throw e;
     }
   }
@@ -136,15 +136,15 @@ export class AntClient {
     try {
       // Step 1: Identify tasks and required tools
       const relevantTools = await this.identifyRequiredTools(query);
-
+  
       // If no relevant tools found, fallback to all available tools
       const toolsToUse =
         relevantTools.length > 0 ? relevantTools : this.availableTools;
-
+  
       // Get chat history from memory
       const memoryResult = await this.memory.loadMemoryVariables({});
       const chatHistoryMessages = memoryResult.chat_history || [];
-
+  
       // Convert chat history to MessageParam format for Anthropic API
       const messages: MessageParam[] = [
         ...chatHistoryMessages.map((msg: BaseMessage) => ({
@@ -153,10 +153,10 @@ export class AntClient {
         })),
         { role: "user", content: query },
       ];
-
+  
       // Add the user's query to chat history
       this.chatHistory.push(new HumanMessage(query));
-
+  
       // Step 2: Process the query with the selected tools
       const response = await this.anthropic.messages.create({
         model: MODEL_NAME,
@@ -164,10 +164,10 @@ export class AntClient {
         messages,
         tools: toolsToUse,
       });
-
+  
       const finalText: string[] = [];
       const toolCalls: { name: string; input: any; output: any }[] = [];
-
+  
       // Process response and handle tool calls
       for (const content of response.content) {
         if (content.type === "text") {
@@ -177,63 +177,96 @@ export class AntClient {
           const toolArgs = content.input as
             | { [x: string]: unknown }
             | undefined;
-
+          const toolId = content.id || `tool_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+  
           finalText.push(
             `[Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}]`,
           );
-          const result = await this.mcp.callTool({
-            name: toolName,
-            arguments: toolArgs,
-          });
-
-          // Record tool call for memory
-          toolCalls.push({
-            name: toolName,
-            input: toolArgs,
-            output: result.content,
-          });
-
-          // Add tool result as user message (following Claude's expected format)
-          messages.push({
-            role: "user",
-            content: result.content as string,
-          });
-
-          // Get response to tool result
-          const toolResponse = await this.anthropic.messages.create({
-            model: MODEL_NAME,
-            max_tokens: 1000,
-            messages,
-          });
-
-          if (toolResponse && toolResponse.content.length > 0) {
-            const toolResponseText =
-              toolResponse.content[0].type === "text"
-                ? toolResponse.content[0].text
-                : "";
-            finalText.push(toolResponseText);
+  
+          try {
+            // Try each client until one successfully handles the tool call
+            const result = await Promise.any(
+              this.mcpClients.map(client =>
+                client.callTool({
+                  name: toolName,
+                  arguments: toolArgs,
+                }).catch(e => {
+                  console.error(`Client failed to handle tool ${toolName}:`, e);
+                  throw e; // Re-throw to be caught by Promise.any
+                })
+              )
+            ).catch((error) => {
+              console.error(`No client could handle tool ${toolName}:`, error);
+              throw new Error(`No client could handle tool ${toolName}`);
+            });
+  
+            // Record tool call for memory
+            toolCalls.push({
+              name: toolName,
+              input: toolArgs,
+              output: result.content,
+            });
+  
+            // Create a new messages array for the tool response
+            const toolResponseMessages = [
+              ...messages,
+              {
+                role: "assistant",
+                content: [
+                  { type: "text", text: finalText.join("\n") },
+                  { type: "tool_use", id: toolId, name: toolName, input: toolArgs }
+                ]
+              },
+              {
+                role: "user",
+                content: [
+                  { 
+                    type: "tool_result", 
+                    tool_call_id: toolId,
+                    content: result.content as string 
+                  }
+                ]
+              }
+            ];
+  
+            // Get response to tool result
+            const toolResponse = await this.anthropic.messages.create({
+              model: MODEL_NAME,
+              max_tokens: 1000,
+              messages: toolResponseMessages,
+            });
+  
+            if (toolResponse && toolResponse.content.length > 0) {
+              const toolResponseText =
+                toolResponse.content[0].type === "text"
+                  ? toolResponse.content[0].text
+                  : "";
+              finalText.push(toolResponseText);
+            }
+          } catch (error) {
+            finalText.push(`Error calling tool ${toolName}: ${error.message}`);
           }
         }
       }
-
+  
       const assistantResponse = finalText.join("\n");
-
+  
       // Add assistant's response to chat history
       this.chatHistory.push(new AIMessage(assistantResponse));
-
+  
       // Save the updated chat history to memory
       await this.memory.saveContext(
         { input: query },
         { output: assistantResponse },
       );
-
+  
       return assistantResponse;
     } catch (error) {
       console.error("Error processing query:", error);
       return `Error: ${error.message}`;
     }
   }
-
+  
   async chatLoop() {
     const rl = readline.createInterface({
       input: process.stdin,
@@ -259,6 +292,6 @@ export class AntClient {
   }
 
   async cleanup() {
-    await this.mcp.close();
+    await Promise.all(this.mcpClients.map(client => client.close()));
   }
 }
