@@ -167,6 +167,7 @@ export class RegistryMcpServer {
       async () => {
         try {
           const tools = await this.registry.listTools();
+          // console.log(`{${JSON.stringify(tools, null, 2)}}`);
           return {
             content: [
               {
@@ -248,17 +249,20 @@ export async function startRegistryServer(registry: Registry): Promise<void> {
 }
 
 // Example usage (can be commented out or removed when importing this module elsewhere)
-// async function main() {
-//   const registry = new inMemoryRegistry();
-//   await registry.initialize();
-//   await registry.addServer(
-//     "/Users/notzree/code/Personal/AI-thing/src/server.py",
-//     "stdio",
-//   );
-//   console.log("finished adding servers");
-//   startRegistryServer(registry).catch((error) => {
-//     console.error("Fatal error in main():", error);
-//     process.exit(1);
-//   });
-// }
-// main();
+async function main() {
+  const registry = new inMemoryRegistry();
+  await registry.initialize();
+  // await registry.addServer(
+  //   "/Users/notzree/code/Personal/AI-thing/src/server.py",
+  //   "stdio",
+  // );
+  await registry.addServer(
+    "https://mcp.composio.dev/browserbase_tool/few-sticky-animal-ZVQ1XF",
+    "sse",
+  );
+  startRegistryServer(registry).catch((error) => {
+    console.error("Fatal error in main():", error);
+    process.exit(1);
+  });
+}
+main();

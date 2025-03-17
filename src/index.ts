@@ -12,7 +12,6 @@ async function main() {
   }
   const registry = new inMemoryRegistry();
   await registry.initialize();
-  å;
   const mcpClient = new AntClient(registry);
   try {
     const url = process.argv[2] || "";

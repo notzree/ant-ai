@@ -26,7 +26,7 @@ export class inMemoryRegistry implements Registry {
         [],
         this.embeddings,
       );
-      console.log("LocalRegistry initialized with empty vector store");
+      // console.log("LocalRegistry initialized with empty vector store");
     }
   }
 
@@ -67,7 +67,7 @@ export class inMemoryRegistry implements Registry {
     }
 
     // Store the tool in our Map for quick retrieval
-    this.tools.set(tool.serverUrl, tool);
+    this.tools.set(tool.name, tool);
 
     // Create a document for the vector store
     const document = new Document({
@@ -81,8 +81,7 @@ export class inMemoryRegistry implements Registry {
 
     // Add to vector store
     await this.vectorStore!.addDocuments([document]);
-    console.log(`Tool added: ${tool.name} (ID: ${tool.name})`);
-
+    // console.log(`Tool added: ${tool.name} (ID: ${tool.name})`);
     return tool;
   }
 
@@ -93,7 +92,7 @@ export class inMemoryRegistry implements Registry {
    */
   public async deleteTool(name: string): Promise<boolean> {
     if (!this.vectorStore || !this.tools.has(name)) {
-      console.log(`Tool with ID ${name} not found`);
+      // console.log(`Tool with ID ${name} not found`);
       return false;
     }
 
@@ -121,7 +120,7 @@ export class inMemoryRegistry implements Registry {
       this.embeddings,
     );
 
-    console.log(`Tool deleted: ${tool?.name}`);
+    // console.log(`Tool deleted: ${tool?.name}`);
     return true;
   }
 
@@ -163,3 +162,12 @@ export class inMemoryRegistry implements Registry {
     return Promise.resolve(Array.from(this.tools.values()));
   }
 }
+
+// async function main() {
+//   const registry = new inMemoryRegistry();
+//   await registry.initialize();
+
+//   const tools = await registry.listTools();
+//   console.log(tools);
+// }
+// main();
