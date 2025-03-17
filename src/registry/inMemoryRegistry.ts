@@ -4,7 +4,10 @@ import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { Document } from "langchain/document";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-
+import {
+  Connector,
+  type ConnectionOptions,
+} from "../shared/connector/connector";
 export class inMemoryRegistry implements Registry {
   private vectorStore: MemoryVectorStore | null = null;
   private embeddings: OpenAIEmbeddings;
@@ -28,9 +31,17 @@ export class inMemoryRegistry implements Registry {
   }
 
   public async addServer(
-    client: Client,
     serverUrl: string,
+    type: "stdio" | "sse",
   ): Promise<AntTool[]> {
+    const connector = new Connector();
+    const opts: ConnectionOptions = {
+      type: type,
+      url: serverUrl,
+      appName: "ant",
+      appVersion: "1.0.0",
+    };
+    const client = await connector.connect(opts);
     const tools = await AntTool.FromClient(client, serverUrl);
     const result = new Array(tools.length);
 
@@ -155,60 +166,17 @@ async function runExample() {
   try {
     const registry = new inMemoryRegistry();
     await registry.initialize();
-
-    // Add some tools
-    await registry.addTool(
-      new AntTool(
-        "tool1",
-        "TextSummarizer",
-        "Summarizes long text into concise bullet points.",
-        {},
-      ),
-    );
-
-    await registry.addTool(
-      new AntTool(
-        "tool2",
-        "ImageAnalyzer",
-        "Analyzes images to extract objects, text, and sentiment.",
-        {},
-      ),
-    );
-
-    await registry.addTool(
-      new AntTool(
-        "tool3",
-        "DataVisualizer",
-        "Creates charts and graphs from tabular data.",
-        {},
-      ),
-    );
-
-    await registry.addTool(
-      new AntTool(
-        "tool4",
-        "SentimentAnalyzer",
-        "Analyzes text to determine sentiment.",
-        {},
-      ),
-    );
-
-    await registry.addTool(
-      new AntTool(
-        "tool5",
-        "TextSummarizer",
-        "Summarizes long texts into concise summaries.",
-        {},
-      ),
-    );
-
-    await registry.addTool(
-      new AntTool(
-        "tool6",
-        "TextSummarizer",
-        "Summarizes long texts into concise summaries.",
-        {},
-      ),
+    const connector = new Connector();
+    const opts: ConnectionOptions = {
+      type: "sse",
+      url: "https://mcp.composio.dev/notion/few-sticky-animal-ZVQ1XF",
+      appName: "ant",
+      appVersion: "1.0.0",
+    };
+    const client = await connector.connect(opts);
+    await registry.addServer(
+      client,
+      "https://mcp.composio.dev/notion/few-sticky-animal-ZVQ1XF",
     );
 
     // Search for tools
@@ -240,4 +208,4 @@ async function runExample() {
   }
 }
 
-runExample();
+// runExample();

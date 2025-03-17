@@ -9,7 +9,7 @@ export interface Registry {
   addTool(tool: AntTool): Promise<AntTool>;
 
   // add server adds all tools from an MCP server to the registry
-  addServer(client: Client, serverUrl: string): Promise<AntTool[]>;
+  addServer(serverUrl: string, type: "stdio" | "sse"): Promise<AntTool[]>;
 
   // List all tools in the registry.
   listTools(): Promise<AntTool[]>;
