@@ -2,6 +2,11 @@ import { Anthropic } from "@anthropic-ai/sdk";
 import type {
   MessageParam,
   Tool,
+  TextBlockParam,
+  ToolUseBlockParam,
+  ToolResultBlockParam,
+  MessageCreateParams,
+  ContentBlockParam,
 } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import readline from "readline/promises";
@@ -27,6 +32,7 @@ export class AntClient {
   private anthropic: Anthropic;
   private registry: Registry;
   private model: ChatAnthropic;
+  private clientLookup = new Map<string, number>(); // maps from tool name -> client index in mcpClients array
   private mcpClients: Client[] = [];
   private availableTools: Tool[] = [];
   private chatHistory: BaseMessage[] = [];
@@ -57,7 +63,7 @@ export class AntClient {
     try {
       const mcpClient = await this.connector.connect(opts);
       this.mcpClients.push(mcpClient);
-      
+
       const toolsResult = await mcpClient.listTools();
       // Add new tools to available tools
       const newTools = toolsResult.tools.map((tool) => ({
@@ -65,7 +71,11 @@ export class AntClient {
         description: tool.description,
         input_schema: tool.inputSchema,
       }));
-      
+
+      for (const tool of newTools) {
+        this.clientLookup.set(tool.name, this.mcpClients.length - 1);
+      }
+
       this.availableTools.push(...newTools);
 
       console.log(
@@ -136,15 +146,15 @@ export class AntClient {
     try {
       // Step 1: Identify tasks and required tools
       const relevantTools = await this.identifyRequiredTools(query);
-  
+
       // If no relevant tools found, fallback to all available tools
       const toolsToUse =
         relevantTools.length > 0 ? relevantTools : this.availableTools;
-  
+
       // Get chat history from memory
       const memoryResult = await this.memory.loadMemoryVariables({});
       const chatHistoryMessages = memoryResult.chat_history || [];
-  
+
       // Convert chat history to MessageParam format for Anthropic API
       const messages: MessageParam[] = [
         ...chatHistoryMessages.map((msg: BaseMessage) => ({
@@ -153,10 +163,10 @@ export class AntClient {
         })),
         { role: "user", content: query },
       ];
-  
+
       // Add the user's query to chat history
       this.chatHistory.push(new HumanMessage(query));
-  
+
       // Step 2: Process the query with the selected tools
       const response = await this.anthropic.messages.create({
         model: MODEL_NAME,
@@ -164,10 +174,10 @@ export class AntClient {
         messages,
         tools: toolsToUse,
       });
-  
+
       const finalText: string[] = [];
       const toolCalls: { name: string; input: any; output: any }[] = [];
-  
+
       // Process response and handle tool calls
       for (const content of response.content) {
         if (content.type === "text") {
@@ -177,65 +187,80 @@ export class AntClient {
           const toolArgs = content.input as
             | { [x: string]: unknown }
             | undefined;
-          const toolId = content.id || `tool_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-  
+          const toolId =
+            content.id ||
+            `tool_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+
           finalText.push(
             `[Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}]`,
           );
-  
+
           try {
-            // Try each client until one successfully handles the tool call
-            const result = await Promise.any(
-              this.mcpClients.map(client =>
-                client.callTool({
-                  name: toolName,
-                  arguments: toolArgs,
-                }).catch(e => {
-                  console.error(`Client failed to handle tool ${toolName}:`, e);
-                  throw e; // Re-throw to be caught by Promise.any
-                })
-              )
-            ).catch((error) => {
-              console.error(`No client could handle tool ${toolName}:`, error);
-              throw new Error(`No client could handle tool ${toolName}`);
+            const clientIndex = this.clientLookup.get(toolName);
+            if (clientIndex === undefined) {
+              throw new Error(`No client registered for tool ${toolName}`);
+            }
+            const result = await this.mcpClients[clientIndex]?.callTool({
+              name: toolName,
+              arguments: toolArgs,
             });
-  
+            if (result === undefined) {
+              throw new Error(`Client failed to handle tool ${toolName}`);
+            }
+
             // Record tool call for memory
             toolCalls.push({
               name: toolName,
               input: toolArgs,
               output: result.content,
             });
-  
-            // Create a new messages array for the tool response
-            const toolResponseMessages = [
+
+            const assistantTextBlock: TextBlockParam = {
+              type: "text",
+              text: finalText.join("\n"),
+            };
+
+            const toolUseBlock: ToolUseBlockParam = {
+              type: "tool_use",
+              id: toolId,
+              name: toolName,
+              input: toolArgs,
+            };
+
+            const toolResultBlock: ToolResultBlockParam = {
+              type: "tool_result",
+              tool_use_id: toolId,
+              content: result.content as string,
+            };
+
+            // Create properly typed messages for the tool response
+            const assistantMessage: MessageParam = {
+              role: "assistant",
+              content: [
+                assistantTextBlock,
+                toolUseBlock,
+              ] as ContentBlockParam[],
+            };
+
+            const userMessage: MessageParam = {
+              role: "user",
+              content: [toolResultBlock] as ContentBlockParam[],
+            };
+
+            // Create a new messages array with proper types
+            const toolResponseMessages: MessageParam[] = [
               ...messages,
-              {
-                role: "assistant",
-                content: [
-                  { type: "text", text: finalText.join("\n") },
-                  { type: "tool_use", id: toolId, name: toolName, input: toolArgs }
-                ]
-              },
-              {
-                role: "user",
-                content: [
-                  { 
-                    type: "tool_result", 
-                    tool_call_id: toolId,
-                    content: result.content as string 
-                  }
-                ]
-              }
+              assistantMessage,
+              userMessage,
             ];
-  
-            // Get response to tool result
+
+            // Call the API with the typed message array
             const toolResponse = await this.anthropic.messages.create({
               model: MODEL_NAME,
               max_tokens: 1000,
               messages: toolResponseMessages,
             });
-  
+
             if (toolResponse && toolResponse.content.length > 0) {
               const toolResponseText =
                 toolResponse.content[0].type === "text"
@@ -248,25 +273,25 @@ export class AntClient {
           }
         }
       }
-  
+
       const assistantResponse = finalText.join("\n");
-  
+
       // Add assistant's response to chat history
       this.chatHistory.push(new AIMessage(assistantResponse));
-  
+
       // Save the updated chat history to memory
       await this.memory.saveContext(
         { input: query },
         { output: assistantResponse },
       );
-  
+
       return assistantResponse;
     } catch (error) {
       console.error("Error processing query:", error);
       return `Error: ${error.message}`;
     }
   }
-  
+
   async chatLoop() {
     const rl = readline.createInterface({
       input: process.stdin,
@@ -292,6 +317,6 @@ export class AntClient {
   }
 
   async cleanup() {
-    await Promise.all(this.mcpClients.map(client => client.close()));
+    await Promise.all(this.mcpClients.map((client) => client.close()));
   }
 }
