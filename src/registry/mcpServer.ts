@@ -261,8 +261,17 @@ async function main() {
   //   "/Users/notzree/code/Personal/AI-thing/src/server.py",
   //   "stdio",
   // );
+  // TODO: add a method to addServer in parallel
+  // await registry.addServer(
+  //   "https://mcp.composio.dev/browserbase_tool/few-sticky-animal-ZVQ1XF",
+  //   "sse",
+  // );
+  // await registry.addServer(
+  //   "https://mcp.composio.dev/gmail/wonderful-odd-gigabyte-aJZbFe",
+  //   "sse",
+  // );
   await registry.addServer(
-    "https://mcp.composio.dev/browserbase_tool/few-sticky-animal-ZVQ1XF",
+    "https://mcp.composio.dev/googledocs/wonderful-odd-gigabyte-aJZbFe",
     "sse",
   );
   startRegistryServer(registry).catch((error) => {

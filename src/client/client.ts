@@ -11,12 +11,13 @@ import type {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import readline from "readline/promises";
 import { BufferMemory } from "langchain/memory";
-import { ToolStore, type ToolHandler } from "../shared/tools/toolStore";
+import { ToolStore } from "../shared/tools/toolStore";
 import {
   Connector,
   type ConnectionOptions,
 } from "../shared/connector/connector";
 import { BaseMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
+import { RegistryClient } from "../registry/registryClient";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 if (!ANTHROPIC_API_KEY) {
@@ -28,22 +29,19 @@ const MODEL_NAME = process.env.MODEL_NAME || "claude-3-5-sonnet-20241022";
 export class AntClient {
   private memory: BufferMemory;
   private anthropic: Anthropic;
-  private toolStore: ToolStore = new ToolStore();
+  private toolStore: ToolStore;
   private chatHistory: BaseMessage[] = [];
 
-  constructor() {
+  constructor(rc: RegistryClient) {
     this.anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     this.memory = new BufferMemory({
       memoryKey: "chat_history",
       returnMessages: true,
     });
+    this.toolStore = new ToolStore(rc);
   }
 
-  async connectToServer(
-    url: string,
-    type: "sse" | "stdio",
-    toolHandlers?: Map<string, ToolHandler>,
-  ) {
+  async connectToServer(url: string, type: "sse" | "stdio") {
     const opts: ConnectionOptions = {
       type: type,
       url: url,
@@ -51,7 +49,7 @@ export class AntClient {
       appVersion: ANT_VERSION,
     };
     try {
-      this.toolStore.connectToServer(opts, toolHandlers);
+      this.toolStore.connectToServer(opts);
     } catch (e) {
       console.log(`Failed to connect to MCP server ${url}: `, e);
       throw e;
@@ -105,17 +103,15 @@ export class AntClient {
           );
 
           try {
-            const { rawResult, callbackResult } =
-              await this.toolStore.executeTool(toolName, toolArgs); // Record tool call for memory
-            if (callbackResult) {
-              finalText.push(
-                `[Tool ${toolName} returned ${JSON.stringify(callbackResult)}]`,
-              );
-            } else {
-              finalText.push(
-                `[Tool ${toolName} returned ${JSON.stringify(rawResult)}]`,
-              );
-            }
+            const { rawResult } = await this.toolStore.executeTool(
+              toolName,
+              toolArgs,
+            ); // Record tool call for memory
+
+            finalText.push(
+              `[Tool ${toolName} returned ${JSON.stringify(rawResult)}]`,
+            );
+
             // toolCalls.push({ do we need this???
             //   name: toolName,
             //   input: toolArgs,

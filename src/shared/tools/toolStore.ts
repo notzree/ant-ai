@@ -2,19 +2,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import { Connector, type ConnectionOptions } from "../connector/connector";
 import { LRUCache } from "lru-cache";
-
 import { MCPServer } from "../mcpServer/server";
-// Define a type for tool handlers
-export type ToolHandler = (
-  toolName: string,
-  toolArgs: any,
-  result: any,
-) => Promise<string | null>;
+import type { RegistryClient } from "../../registry/registryClient";
 
 // Define a type for tool execution result
 export interface ToolExecutionResult {
   rawResult: any;
-  callbackResult: string | null;
 }
 
 // Store server information for a tool
@@ -26,11 +19,9 @@ interface ToolServerInfo {
 }
 
 // Default handler that just passes through the result
-export const defaultToolHandler: ToolHandler = async () => null;
 
 export class ToolStore {
-  // Maps from tool name -> custom handler
-  private toolHandlers = new Map<string, ToolHandler>();
+  private rc: RegistryClient;
 
   // All available tools (including those without connected clients)
   private availableTools: Tool[] = [];
@@ -48,6 +39,7 @@ export class ToolStore {
   private appVersion: string;
 
   constructor(
+    registryClient: RegistryClient,
     connector?: Connector,
     appName = "ant",
     appVersion = "1.0.0",
@@ -56,6 +48,7 @@ export class ToolStore {
     this.connector = connector || new Connector();
     this.appName = appName;
     this.appVersion = appVersion;
+    this.rc = registryClient;
 
     this.clientCache = new LRUCache({
       max: maxConnections,
@@ -75,40 +68,13 @@ export class ToolStore {
    * Get all available tools
    */
   getAvailableTools(): Tool[] {
-    return [...this.availableTools];
-  }
-
-  /**
-   * Register a custom handler for a specific tool
-   */
-  registerToolHandler(toolName: string, handler: ToolHandler): void {
-    this.toolHandlers.set(toolName, handler);
-    console.log(`Registered custom handler for tool: ${toolName}`);
-  }
-
-  /**
-   * Add multiple tool handlers at once
-   */
-  registerToolHandlers(handlers: Map<string, ToolHandler>): void {
-    for (const [toolName, handler] of handlers.entries()) {
-      this.registerToolHandler(toolName, handler);
-    }
-  }
-
-  /**
-   * Get the handler for a specified tool
-   */
-  private getToolHandler(toolName: string): ToolHandler {
-    return this.toolHandlers.get(toolName) || defaultToolHandler;
+    return [...this.availableTools, ...this.rc.registryTools];
   }
 
   /**
    * Connect to an MCP server and register its tools immediately
    */
-  async connectToServer(
-    opts: ConnectionOptions,
-    toolHandlers?: Map<string, ToolHandler>,
-  ): Promise<Tool[]> {
+  async connectToServer(opts: ConnectionOptions): Promise<Tool[]> {
     try {
       // Use cache key for consistency with ensureClientConnection
       const cacheKey = `${opts.url}::${opts.type}`;
@@ -146,10 +112,6 @@ export class ToolStore {
         newTools.map(({ name }) => name),
       );
 
-      if (toolHandlers) {
-        this.registerToolHandlers(toolHandlers);
-      }
-
       return newTools;
     } catch (e) {
       console.log(`Failed to connect to MCP server ${opts.url}: `, e);
@@ -162,12 +124,9 @@ export class ToolStore {
    * @param serverToolsMap Map of MCP servers to their tools
    * @param toolHandlers Optional map of tool handlers
    */
-  registerTools(
-    serverToolsMap: Map<MCPServer, Tool[]>,
-    toolHandlers?: Map<string, ToolHandler>,
-  ): Tool[] {
+  registerTools(serverToolsMap: Map<MCPServer, Tool[]>): Tool[] {
     const newTools: Tool[] = [];
-
+    console.error(serverToolsMap);
     // Process each server and its tools
     for (const [server, tools] of serverToolsMap.entries()) {
       for (const tool of tools) {
@@ -184,11 +143,6 @@ export class ToolStore {
           authToken: server.authToken,
         });
       }
-    }
-
-    // Register any custom handlers
-    if (toolHandlers) {
-      this.registerToolHandlers(toolHandlers);
     }
 
     console.log(`Registered ${newTools.length} tools for lazy initialization`);
@@ -243,31 +197,71 @@ export class ToolStore {
     toolName: string,
     toolArgs: any,
   ): Promise<ToolExecutionResult> {
-    try {
-      // Get a client for this tool (may create a new connection or reuse existing)
-      const client = await this.ensureClientConnection(toolName);
-
-      // Call the tool
-      const result = await client.callTool({
-        name: toolName,
-        arguments: toolArgs,
-      });
-
-      if (result === undefined) {
-        throw new Error(`Client failed to handle tool ${toolName}`);
+    if (this.rc.Tools().has(toolName)) {
+      try {
+        // Handle special registry tools that we need to process
+        // we need to convert each of the complex objects back into JSON strings
+        // so the llm can understand them.
+        // also TODO: figure out if there is a better way to maintain this
+        // since we would need to update this huge if statement chain, the registryClient, the mcpServer, and the registry each time we make a change.
+        if (toolName === "query-tools") {
+          const result = await this.rc.queryTools(toolArgs);
+          this.registerTools(result);
+          return {
+            rawResult: JSON.stringify(result),
+          };
+        } else if (toolName === "list-tools") {
+          const result = await this.rc.listTools(toolArgs);
+          return {
+            rawResult: JSON.stringify(result),
+          };
+        } else if (toolName === "add-tool") {
+          const result = await this.rc.addTool(toolArgs.tool);
+          return {
+            rawResult: JSON.stringify(result),
+          };
+        } else if (toolName === "add-server") {
+          const result = await this.rc.addServer(
+            toolArgs.serverUrl,
+            toolArgs.type,
+          );
+          return {
+            rawResult: JSON.stringify(result),
+          };
+        } else if (toolName === "delete-tool") {
+          const result = await this.rc.deleteTool(toolArgs.name);
+          return {
+            rawResult: JSON.stringify(result),
+          };
+        } else {
+          throw new Error(`Unsupported registry tool ${toolName}`);
+        }
+      } catch (error) {
+        console.error(`Error executing registry tool ${toolName}:`, error);
+        throw error;
       }
+    } else {
+      try {
+        // Get a client for this tool (may create a new connection or reuse existing)
+        const client = await this.ensureClientConnection(toolName);
 
-      // Handle result with custom handlers as before
-      const handler = this.getToolHandler(toolName);
-      const processedResult = await handler(toolName, toolArgs, result.content);
+        // Call the tool
+        const result = await client.callTool({
+          name: toolName,
+          arguments: toolArgs,
+        });
 
-      return {
-        rawResult: result.content,
-        callbackResult: processedResult,
-      };
-    } catch (error) {
-      console.error(`Error executing tool ${toolName}:`, error);
-      throw error;
+        if (result === undefined) {
+          throw new Error(`Client failed to handle tool ${toolName}`);
+        }
+
+        return {
+          rawResult: result.content,
+        };
+      } catch (error) {
+        console.error(`Error executing tool ${toolName}:`, error);
+        throw error;
+      }
     }
   }
 
