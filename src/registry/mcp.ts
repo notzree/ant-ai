@@ -2,7 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import type { Registry } from "./registry.js";
-import { AntTool } from "../shared/tools/tool.js";
+// import { AntTool } from "../shared/tools/tool.js";
+import type { Tool } from "@anthropic-ai/sdk/resources/index.mjs";
 import { inMemoryRegistry } from "./inMemoryRegistry.js";
 
 /**
@@ -82,11 +83,22 @@ export class RegistryMcpServer {
           .object({
             name: z.string().describe("Name of the tool"),
             description: z.string().describe("Description of the tool"),
-            serverUrl: z
-              .string()
-              .describe("URL of the server hosting the tool"),
-            inputSchema: z
-              .object({})
+            input_schema: z
+              .object({
+                type: z
+                  .literal("object")
+                  .describe(
+                    "Must be 'object' for Anthropic Tool compatibility",
+                  ),
+                properties: z
+                  .record(z.any())
+                  .optional()
+                  .describe("Properties of the input schema"),
+                required: z
+                  .array(z.string())
+                  .optional()
+                  .describe("Required properties"),
+              })
               .passthrough()
               .describe("Schema defining the input parameters for the tool"),
           })
@@ -94,14 +106,7 @@ export class RegistryMcpServer {
       },
       async ({ tool }) => {
         try {
-          // Create a proper AntTool instance from the input
-          const antTool = new AntTool(
-            tool.serverUrl,
-            tool.name,
-            tool.description,
-            tool.inputSchema,
-          );
-          const addedTool = await this.registry.addTool(antTool);
+          const addedTool = await this.registry.addTool(tool);
           return {
             content: [
               {
