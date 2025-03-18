@@ -17,8 +17,6 @@ import {
   type ConnectionOptions,
 } from "../shared/connector/connector";
 import { BaseMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
-import type { Registry } from "../registry/registry";
-import type { AntTool } from "../shared/tools/tool";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 if (!ANTHROPIC_API_KEY) {
@@ -30,7 +28,6 @@ const MODEL_NAME = process.env.MODEL_NAME || "claude-3-5-sonnet-20241022";
 export class AntClient {
   private memory: BufferMemory;
   private anthropic: Anthropic;
-  private registry: Registry;
   private model: ChatAnthropic;
   private clientLookup = new Map<string, number>(); // maps from tool name -> client index in mcpClients array
   private mcpClients: Client[] = [];
@@ -38,8 +35,7 @@ export class AntClient {
   private chatHistory: BaseMessage[] = [];
   private connector: Connector = new Connector();
 
-  constructor(registry: Registry) {
-    this.registry = registry;
+  constructor() {
     this.anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     this.model = new ChatAnthropic({
       anthropicApiKey: ANTHROPIC_API_KEY,
@@ -88,68 +84,12 @@ export class AntClient {
     }
   }
 
-  /**
-   * Identifies required tasks from the user query and finds relevant tools
-   */
-  async identifyRequiredTools(query: string): Promise<Tool[]> {
-    try {
-      // Get chat history for context
-      const memoryResult = await this.memory.loadMemoryVariables({});
-      const chatHistoryMessages = memoryResult.chat_history || [];
-
-      // Convert chat history to MessageParam format
-      const messages: MessageParam[] = [
-        ...chatHistoryMessages.map((msg: BaseMessage) => ({
-          role: msg._getType() === "human" ? "user" : "assistant",
-          content: msg.content,
-        })),
-        { role: "user", content: query },
-      ];
-
-      // Ask the LLM to identify required tasks with the system instruction as a parameter
-      const taskAnalysisResponse = await this.anthropic.messages.create({
-        model: MODEL_NAME,
-        max_tokens: 300,
-        system:
-          "Analyze the user's query and identify specific tasks that need to be performed. List these tasks in a concise, structured format that can be used for tool selection. Focus on actionable tasks rather than general concepts.",
-        messages,
-      });
-
-      // Extract tasks from the response
-      const taskAnalysis = taskAnalysisResponse.content[0].text;
-      console.log("Task analysis:", taskAnalysis);
-
-      // Use the task analysis to query for relevant tools
-      const relevantAntTools = await this.registry.queryTools(taskAnalysis, 3);
-
-      // Convert AntTools to Tools format compatible with Anthropic API
-      const relevantTools: Tool[] = relevantAntTools.map((tool: AntTool) => {
-        return {
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.inputSchema,
-        };
-      });
-
-      console.log(
-        "Selected relevant tools:",
-        relevantTools.map((t) => t.name).join(", "),
-      );
-      return relevantTools;
-    } catch (error) {
-      console.error("Error identifying required tools:", error);
-      return [];
-    }
-  }
-
   async processQuery(query: string) {
     try {
       // Step 1: Identify tasks and required tools
-      const relevantTools = await this.identifyRequiredTools(query);
 
       // If no relevant tools found, fallback to all available tools
-      const toolsToUse =
-        relevantTools.length > 0 ? relevantTools : this.availableTools;
+      const toolsToUse = this.availableTools;
 
       // Get chat history from memory
       const memoryResult = await this.memory.loadMemoryVariables({});

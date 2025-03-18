@@ -7,6 +7,7 @@ import {
   Connector,
   type ConnectionOptions,
 } from "../shared/connector/connector";
+import type { MCPServer } from "../shared/mcpServer/server";
 
 export class inMemoryRegistry implements Registry {
   private vectorStore: MemoryVectorStore | null = null;
@@ -128,12 +129,12 @@ export class inMemoryRegistry implements Registry {
    * Search for tools based on a query string
    * @param query - The search query
    * @param limit - The maximum number of results to return (default: 5)
-   * @returns The matching tools
+   * @returns a promise resolving to an array of servers to connect to.
    */
-  public async queryTools(query: string, limit?: number): Promise<AntTool[]> {
+  public async queryTools(query: string, limit?: number): Promise<MCPServer[]> {
     if (!this.vectorStore) {
       await this.initialize();
-      return []; // Return empty array if we just initialized (no tools yet)
+      return []; // Return empty array if we just initialized (no servers)
     }
     if (!limit) {
       // Default limit

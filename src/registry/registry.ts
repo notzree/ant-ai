@@ -1,5 +1,6 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { AntTool } from "../shared/tools/tool.js";
+import type { MCPServer } from "../shared/mcpServer/server.js";
 
 /**
  * Registry interface for managing AI assistant tools
@@ -10,9 +11,9 @@ export interface Registry {
    *
    * @param query - The search query to match against tools
    * @param limit - Maximum number of results to return (default: 5)
-   * @returns Promise resolving to an array of matching tools
+   * @returns Promise resolving to an array of mcp servers to connect to.
    */
-  queryTools(query: string, limit?: number): Promise<AntTool[]>;
+  queryTools(query: string, limit?: number): Promise<MCPServer[]>;
 
   /**
    * Add a tool to the registry

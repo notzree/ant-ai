@@ -13,8 +13,9 @@ async function main() {
   }
   const registry = new inMemoryRegistry();
   await registry.initialize();
-  const mcpClient = new AntClient(registry);
 
+
+  const mcpClient = new AntClient();
   try {
     // Process all server URLs provided as arguments
     const serverArgs = process.argv.slice(2);
