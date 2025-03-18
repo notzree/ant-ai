@@ -11,7 +11,7 @@ import type {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import readline from "readline/promises";
 import { BufferMemory } from "langchain/memory";
-import { ChatAnthropic } from "@langchain/anthropic";
+import { ToolStore, type ToolHandler } from "../shared/tools/toolStore";
 import {
   Connector,
   type ConnectionOptions,
@@ -28,28 +28,22 @@ const MODEL_NAME = process.env.MODEL_NAME || "claude-3-5-sonnet-20241022";
 export class AntClient {
   private memory: BufferMemory;
   private anthropic: Anthropic;
-  private model: ChatAnthropic;
-  private clientLookup = new Map<string, number>(); // maps from tool name -> client index in mcpClients array
-  private mcpClients: Client[] = [];
-  private availableTools: Tool[] = [];
+  private toolStore: ToolStore = new ToolStore();
   private chatHistory: BaseMessage[] = [];
-  private connector: Connector = new Connector();
 
   constructor() {
     this.anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-    this.model = new ChatAnthropic({
-      anthropicApiKey: ANTHROPIC_API_KEY,
-      modelName: MODEL_NAME,
-      temperature: 0.7,
-    });
-
     this.memory = new BufferMemory({
       memoryKey: "chat_history",
       returnMessages: true,
     });
   }
 
-  async connectToServer(url: string, type: "sse" | "stdio") {
+  async connectToServer(
+    url: string,
+    type: "sse" | "stdio",
+    toolHandlers?: Map<string, ToolHandler>,
+  ) {
     const opts: ConnectionOptions = {
       type: type,
       url: url,
@@ -57,27 +51,7 @@ export class AntClient {
       appVersion: ANT_VERSION,
     };
     try {
-      const mcpClient = await this.connector.connect(opts);
-      this.mcpClients.push(mcpClient);
-
-      const toolsResult = await mcpClient.listTools();
-      // Add new tools to available tools
-      const newTools = toolsResult.tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-      }));
-
-      for (const tool of newTools) {
-        this.clientLookup.set(tool.name, this.mcpClients.length - 1);
-      }
-
-      this.availableTools.push(...newTools);
-
-      console.log(
-        `Connected to server ${url} with tools:`,
-        newTools.map(({ name }) => name),
-      );
+      this.toolStore.connectToServer(opts, toolHandlers);
     } catch (e) {
       console.log(`Failed to connect to MCP server ${url}: `, e);
       throw e;
@@ -86,11 +60,6 @@ export class AntClient {
 
   async processQuery(query: string) {
     try {
-      // Step 1: Identify tasks and required tools
-
-      // If no relevant tools found, fallback to all available tools
-      const toolsToUse = this.availableTools;
-
       // Get chat history from memory
       const memoryResult = await this.memory.loadMemoryVariables({});
       const chatHistoryMessages = memoryResult.chat_history || [];
@@ -112,11 +81,11 @@ export class AntClient {
         model: MODEL_NAME,
         max_tokens: 1000,
         messages,
-        tools: toolsToUse,
+        tools: this.toolStore.getAvailableTools(),
       });
 
       const finalText: string[] = [];
-      const toolCalls: { name: string; input: any; output: any }[] = [];
+      // const toolCalls: { name: string; input: any; output: any }[] = []; todo: why tf r we using this
 
       // Process response and handle tool calls
       for (const content of response.content) {
@@ -136,24 +105,22 @@ export class AntClient {
           );
 
           try {
-            const clientIndex = this.clientLookup.get(toolName);
-            if (clientIndex === undefined) {
-              throw new Error(`No client registered for tool ${toolName}`);
+            const { rawResult, callbackResult } =
+              await this.toolStore.executeTool(toolName, toolArgs); // Record tool call for memory
+            if (callbackResult) {
+              finalText.push(
+                `[Tool ${toolName} returned ${JSON.stringify(callbackResult)}]`,
+              );
+            } else {
+              finalText.push(
+                `[Tool ${toolName} returned ${JSON.stringify(rawResult)}]`,
+              );
             }
-            const result = await this.mcpClients[clientIndex]?.callTool({
-              name: toolName,
-              arguments: toolArgs,
-            });
-            if (result === undefined) {
-              throw new Error(`Client failed to handle tool ${toolName}`);
-            }
-
-            // Record tool call for memory
-            toolCalls.push({
-              name: toolName,
-              input: toolArgs,
-              output: result.content,
-            });
+            // toolCalls.push({ do we need this???
+            //   name: toolName,
+            //   input: toolArgs,
+            //   output: rawResult,
+            // });
 
             const assistantTextBlock: TextBlockParam = {
               type: "text",
@@ -170,7 +137,7 @@ export class AntClient {
             const toolResultBlock: ToolResultBlockParam = {
               type: "tool_result",
               tool_use_id: toolId,
-              content: result.content as string,
+              content: rawResult as string,
             };
 
             // Create properly typed messages for the tool response
@@ -257,6 +224,6 @@ export class AntClient {
   }
 
   async cleanup() {
-    await Promise.all(this.mcpClients.map((client) => client.close()));
+    await this.toolStore.cleanup();
   }
 }
