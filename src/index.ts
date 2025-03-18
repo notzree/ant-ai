@@ -7,13 +7,10 @@ async function main() {
 
   if (process.argv.length < 3) {
     console.log(
-      "Usage: bun src/index.ts <server urls...>\nFormat: <url>::<type> where type is 'sse' or 'stdio'\nExample: https://server1.com::sse https://server2.com::sse localhost::stdio"
+      "Usage: bun src/index.ts <server urls...>\nFormat: <url>::<type> where type is 'sse' or 'stdio'\nExample: https://server1.com::sse https://server2.com::sse localhost::stdio",
     );
     return;
   }
-  const registry = new inMemoryRegistry();
-  await registry.initialize();
-
 
   const mcpClient = new AntClient();
   try {
@@ -23,7 +20,9 @@ async function main() {
       // Use double colon as separator to avoid conflicts with URL structure
       const lastDoubleColonIndex = arg.lastIndexOf("::");
       if (lastDoubleColonIndex === -1) {
-        console.log(`Invalid server argument: ${arg}. Format should be url::type`);
+        console.log(
+          `Invalid server argument: ${arg}. Format should be url::type`,
+        );
         continue;
       }
 
@@ -31,7 +30,9 @@ async function main() {
       const type = arg.substring(lastDoubleColonIndex + 2);
 
       if (!url || !type || !["sse", "stdio"].includes(type)) {
-        console.log(`Invalid server argument: ${arg}. Format should be url::type`);
+        console.log(
+          `Invalid server argument: ${arg}. Format should be url::type`,
+        );
         continue;
       }
       await mcpClient.connectToServer(url, type as "sse" | "stdio");

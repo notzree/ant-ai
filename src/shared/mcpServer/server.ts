@@ -8,4 +8,7 @@ export class MCPServer {
     this.type = type;
     this.authToken = authToken;
   }
+  public getId(): string {
+    return `${this.url}::${this.type}`;
+  }
 }

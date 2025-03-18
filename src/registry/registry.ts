@@ -1,6 +1,7 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { AntTool } from "../shared/tools/tool.js";
+// import { AntTool } from "../shared/tools/tool.js";
 import type { MCPServer } from "../shared/mcpServer/server.js";
+import type { Tool } from "@anthropic-ai/sdk/resources/index.mjs";
 
 /**
  * Registry interface for managing AI assistant tools
@@ -13,15 +14,16 @@ export interface Registry {
    * @param limit - Maximum number of results to return (default: 5)
    * @returns Promise resolving to an array of mcp servers to connect to.
    */
-  queryTools(query: string, limit?: number): Promise<MCPServer[]>;
+  queryTools(query: string, limit?: number): Promise<Map<MCPServer, Tool[]>>;
 
   /**
    * Add a tool to the registry
    *
    * @param tool - The tool to add to the registry
+   * @param server - The server which holds the tool
    * @returns Promise resolving to the added tool
    */
-  addTool(tool: AntTool): Promise<AntTool>;
+  addTool(tool: Tool, server: MCPServer): Promise<Tool>;
 
   /**
    * Add all tools from an MCP server to the registry
@@ -30,14 +32,14 @@ export interface Registry {
    * @param type - Type of connection to the server ("stdio" or "sse")
    * @returns Promise resolving to an array of added tools
    */
-  addServer(serverUrl: string, type: "stdio" | "sse"): Promise<AntTool[]>;
+  addServer(serverUrl: string, type: "stdio" | "sse"): Promise<Tool[]>;
 
   /**
    * List all tools in the registry
    *
    * @returns Promise resolving to an array of all tools
    */
-  listTools(): Promise<AntTool[]>;
+  listTools(): Promise<Tool[]>;
 
   /**
    * Delete a tool from the registry

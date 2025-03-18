@@ -7,6 +7,7 @@ import { execSync } from "child_process";
 export type ConnectionOptions = {
   type: "stdio" | "sse";
   url: string;
+  authToken?: string;
   appName: string;
   appVersion: string;
 };
