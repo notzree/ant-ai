@@ -7,6 +7,7 @@ import { execSync } from "child_process";
 export type ConnectionOptions = {
   type: "stdio" | "sse";
   url: string;
+  authToken?: string;
   appName: string;
   appVersion: string;
 };
@@ -45,9 +46,10 @@ export class Connector {
   ): Promise<Client> {
     const isJs = serverScriptPath.endsWith(".js");
     const isPy = serverScriptPath.endsWith(".py");
+    const isTs = serverScriptPath.endsWith(".ts");
 
-    if (!isJs && !isPy) {
-      throw new Error("Server script must be a .js or .py file");
+    if (!isJs && !isPy && !isTs) {
+      throw new Error("Server script must be a .js or .py or .ts file");
     }
 
     let command: string;
@@ -61,6 +63,8 @@ export class Connector {
       } catch (e) {
         throw new Error("uv is not installed or not in PATH");
       }
+    } else if (isTs) {
+      command = "bun";
     } else {
       command = process.execPath;
     }

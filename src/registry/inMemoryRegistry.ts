@@ -1,14 +1,19 @@
 import type { Registry } from "./registry";
-import type { AntTool } from "../shared/tools/tool";
-import { FakeTool } from "../shared/tools/fakeTool";
+import { ToolsFromClient, type ToolWithServerInfo } from "../shared/tools/tool";
+import type { Tool } from "@anthropic-ai/sdk/src/resources/index.js";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { Document } from "langchain/document";
 import { OpenAIEmbeddings } from "@langchain/openai";
-
+import {
+  Connector,
+  type ConnectionOptions,
+} from "../shared/connector/connector";
+import { MCPServer } from "../shared/mcpServer/server";
 export class inMemoryRegistry implements Registry {
   private vectorStore: MemoryVectorStore | null = null;
   private embeddings: OpenAIEmbeddings;
-  private tools: Map<string, AntTool> = new Map();
+  private tools: Map<string, ToolWithServerInfo> = new Map();
+  private servers: Map<string, MCPServer> = new Map(); // Map of server IDs to server objects
 
   constructor() {
     this.embeddings = new OpenAIEmbeddings();
@@ -23,59 +28,205 @@ export class inMemoryRegistry implements Registry {
         [],
         this.embeddings,
       );
-      console.log("LocalRegistry initialized with empty vector store");
     }
   }
 
   /**
-   * Add a tool to the vector store
+   * Add multiple servers and their tools concurrently from string format
+   * @param serverStrings - Array of server strings in format "url::type" where type is 'sse' or 'stdio'
+   * @param authTokens - Optional map of server URLs to their authentication tokens
+   * @returns Map of server IDs to their added tools
+   */
+  public async addServersConcurrently(
+    serverStrings: string[],
+    authTokens?: Map<string, string>,
+  ): Promise<Map<string, Tool[]>> {
+    if (!this.vectorStore) {
+      throw new Error("Vector store not initialized");
+    }
+
+    // Parse server strings into config objects
+    const serverConfigs = serverStrings.map((serverString) => {
+      const [serverUrl, type] = serverString.split("::");
+
+      if (!serverUrl || !type) {
+        throw new Error(
+          `Invalid server string format: ${serverString}. Expected format: "url::type"`,
+        );
+      }
+
+      if (type !== "sse" && type !== "stdio") {
+        throw new Error(
+          `Invalid server type: ${type}. Expected 'sse' or 'stdio'`,
+        );
+      }
+
+      // Get the auth token for this specific server URL if it exists
+      const authToken = authTokens?.get(serverUrl);
+
+      return {
+        serverUrl,
+        type: type as "stdio" | "sse",
+        authToken,
+      };
+    });
+
+    const results = new Map<string, Tool[]>();
+
+    // Create promises for each server addition
+    const serverPromises = serverConfigs.map(async (config) => {
+      const { serverUrl, type, authToken } = config;
+
+      // Create server object
+      const server = new MCPServer(serverUrl, type, authToken);
+      const serverId = server.getId();
+      this.servers.set(serverId, server);
+
+      const connector = new Connector();
+      const opts: ConnectionOptions = {
+        type: type,
+        url: serverUrl,
+        appName: "ant",
+        appVersion: "1.0.0",
+        authToken: authToken,
+      };
+
+      try {
+        const client = await connector.connect(opts);
+        const tools = await ToolsFromClient(client, serverUrl);
+
+        // Create promises for each tool addition
+        const toolsArray = new Array(tools.length);
+        const toolPromises = tools.map(async (tool, index) => {
+          toolsArray[index] = await this.addTool(tool, server);
+        });
+
+        // Wait for all tools to be added
+        await Promise.all(toolPromises);
+
+        // Store the result
+        results.set(serverId, toolsArray);
+        return { serverId, tools: toolsArray };
+      } catch (error) {
+        console.error(
+          `Failed to connect to server ${serverUrl}: ${error.message}`,
+        );
+        // Still add the server to the results with an empty tools array
+        results.set(serverId, []);
+        return { serverId, tools: [] };
+      }
+    });
+
+    // Wait for all servers to be added concurrently
+    await Promise.all(serverPromises);
+
+    return results;
+  }
+
+  /**
+   * Add a server and all its tools using string format
+   * @param serverString - Server string in format "url::type" where type is 'sse' or 'stdio'
+   * @param authToken - Optional authentication token
+   * @returns Array of added tools
+   */
+  public async addServer(
+    serverString: string,
+    authToken?: string,
+  ): Promise<Tool[]> {
+    if (!this.vectorStore) {
+      throw new Error("Vector store not initialized");
+    }
+
+    // Parse server string
+    const [serverUrl, type] = serverString.split("::");
+
+    if (!serverUrl || !type) {
+      throw new Error(
+        `Invalid server string format: ${serverString}. Expected format: "url::type"`,
+      );
+    }
+
+    if (type !== "sse" && type !== "stdio") {
+      throw new Error(
+        `Invalid server type: ${type}. Expected 'sse' or 'stdio'`,
+      );
+    }
+
+    // Create server object
+    const server = new MCPServer(serverUrl, type as "stdio" | "sse", authToken);
+    const serverId = server.getId();
+    this.servers.set(serverId, server);
+
+    const connector = new Connector();
+    const opts: ConnectionOptions = {
+      type: type as "stdio" | "sse",
+      url: serverUrl,
+      appName: "ant",
+      appVersion: "1.0.0",
+      authToken: authToken,
+    };
+
+    const client = await connector.connect(opts);
+    const tools = await ToolsFromClient(client, serverUrl);
+    const result = new Array(tools.length);
+    const promises = tools.map(async (tool, index) => {
+      result[index] = await this.addTool(tool, server);
+    });
+    await Promise.all(promises);
+    return result;
+  }
+
+  /**
+   * Add a tool with its associated server
    * @param tool - The tool to add
+   * @param server - The MCPServer the tool belongs to
    * @returns The added tool
    */
-  public async addTool(tool: AntTool): Promise<AntTool> {
+  public async addTool(tool: Tool, server: MCPServer): Promise<Tool> {
     if (!this.vectorStore) {
       await this.initialize();
     }
 
-    // Ensure the tool has an ID
-    if (!tool.id) {
-      tool.id = this.generateId();
-    }
+    // Create the tool with server info
+    const toolWithServer: ToolWithServerInfo = {
+      tool: tool,
+      server: server,
+    };
 
     // Store the tool in our Map for quick retrieval
-    this.tools.set(tool.id, tool);
+    this.tools.set(tool.name, toolWithServer);
+
+    // Make sure the server is stored
+    this.servers.set(server.getId(), server);
 
     // Create a document for the vector store
     const document = new Document({
       pageContent: `${tool.name}: ${tool.description}`,
       metadata: {
-        id: tool.id,
         name: tool.name,
+        serverId: server.getId(),
         toolData: JSON.stringify(tool), // Store the full tool data as JSON
       },
     });
 
     // Add to vector store
     await this.vectorStore!.addDocuments([document]);
-    console.log(`Tool added: ${tool.name} (ID: ${tool.id})`);
-
     return tool;
   }
 
   /**
-   * Delete a tool by ID
-   * @param id - The ID of the tool to delete
+   * Delete a tool by name
+   * @param name - The name of the tool to delete
    * @returns boolean indicating success
    */
-  public async deleteTool(id: string): Promise<boolean> {
-    if (!this.vectorStore || !this.tools.has(id)) {
-      console.log(`Tool with ID ${id} not found`);
+  public async deleteTool(name: string): Promise<boolean> {
+    if (!this.vectorStore || !this.tools.has(name)) {
       return false;
     }
 
     // Remove from our tools Map
-    const tool = this.tools.get(id);
-    this.tools.delete(id);
+    const toolInfo = this.tools.get(name);
+    this.tools.delete(name);
 
     // For in-memory vector store, we need to recreate it without the deleted document
     // since MemoryVectorStore doesn't support direct deletion
@@ -84,181 +235,113 @@ export class inMemoryRegistry implements Registry {
     // Recreate the vector store
     this.vectorStore = await MemoryVectorStore.fromDocuments(
       remainingTools.map(
-        (tool) =>
+        (toolInfo) =>
           new Document({
-            pageContent: `${tool.name}: ${tool.description}`,
+            pageContent: `${toolInfo.tool.name}: ${toolInfo.tool.description}`,
             metadata: {
-              id: tool.id,
-              name: tool.name,
-              toolData: JSON.stringify(tool),
+              name: toolInfo.tool.name,
+              serverId: toolInfo.server.getId(),
+              toolData: JSON.stringify(toolInfo.tool),
             },
           }),
       ),
       this.embeddings,
     );
 
-    console.log(`Tool deleted: ${tool?.name} (ID: ${id})`);
     return true;
-  }
-
-  /**
-   * Delete a tool by name
-   * @param name - The name of the tool to delete
-   * @returns boolean indicating success
-   */
-  public async deleteToolByName(name: string): Promise<boolean> {
-    // Find the tool with the given name
-    const tool = Array.from(this.tools.values()).find((t) => t.name === name);
-
-    if (!tool) {
-      console.log(`Tool with name ${name} not found`);
-      return false;
-    }
-
-    // Delete by ID
-    return this.deleteTool(tool.id);
   }
 
   /**
    * Search for tools based on a query string
    * @param query - The search query
    * @param limit - The maximum number of results to return (default: 5)
-   * @returns The matching tools
+   * @returns Array of ToolWithServerInfo for relevant tools
    */
-  public async queryTools(query: string, limit?: number): Promise<AntTool[]> {
+  public async queryTools(
+    query: string,
+    limit?: number,
+  ): Promise<ToolWithServerInfo[]> {
     if (!this.vectorStore) {
       await this.initialize();
-      return []; // Return empty array if we just initialized (no tools yet)
+      return []; // Return empty array
     }
     if (!limit) {
       // Default limit
-      limit = 5;
+      limit = 6;
     }
 
     // Perform similarity search
-    const results = await this.vectorStore.similaritySearch(query, limit);
+    const results = await this.vectorStore.similaritySearch(
+      query + "\n Additionally, any relevant connection tools",
+      limit,
+    );
+    const tools: ToolWithServerInfo[] = results
+      .map((doc) => {
+        try {
+          const serverId = doc.metadata.serverId as string;
+          const mcpServer = this.servers.get(serverId);
+          if (!mcpServer) {
+            console.error(`Server with ID ${serverId} not found`);
+            return null;
+          }
+          const tool = JSON.parse(doc.metadata.toolData as string) as Tool;
+          return {
+            tool: tool,
+            server: mcpServer,
+          };
+        } catch (e) {
+          console.error(`Error parsing tool data for ${doc.metadata.name}:`, e);
+          return null;
+        }
+      })
+      .filter((item): item is ToolWithServerInfo => item !== null);
 
-    // Convert results back to AntTool objects
-    return results.map((doc) => {
-      try {
-        return JSON.parse(doc.metadata.toolData as string) as AntTool;
-      } catch (e) {
-        console.error(`Error parsing tool data for ${doc.metadata.name}:`, e);
-        throw new Error("failed to parse tool data");
-      }
-    });
+    return tools;
   }
 
   /**
    * Get all tools
    * @returns Array of all tools
    */
-  public async listTools(): Promise<AntTool[]> {
-    return Promise.resolve(Array.from(this.tools.values()));
+  public async listTools(): Promise<Tool[]> {
+    return Promise.resolve(
+      Array.from(this.tools.values()).map((toolInfo) => toolInfo.tool),
+    );
   }
 
   /**
-   * Get a specific tool by ID
-   * @param id - The ID of the tool to get
-   * @returns The tool or undefined if not found
+   * Get all servers
+   * @returns Array of all servers
    */
-  public getToolById(id: string): AntTool | undefined {
-    return this.tools.get(id);
+  public async listServers(): Promise<MCPServer[]> {
+    return Promise.resolve(Array.from(this.servers.values()));
   }
 
   /**
-   * Generate a simple ID
-   * @returns A unique ID
+   * Get all tools grouped by server
+   * @returns Map of server to tools
    */
-  private generateId(): string {
-    return `tool_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  public async getToolsByServer(): Promise<Map<MCPServer, Tool[]>> {
+    const serverMap = new Map<MCPServer, Tool[]>();
+
+    // Initialize empty arrays for each server
+    for (const server of this.servers.values()) {
+      serverMap.set(server, []);
+    }
+
+    // Add tools to their respective servers
+    for (const toolInfo of this.tools.values()) {
+      const { tool, server } = toolInfo;
+
+      // Find the matching server in our map
+      for (const [mapServer, tools] of serverMap.entries()) {
+        if (server.equals(mapServer)) {
+          tools.push(tool);
+          break;
+        }
+      }
+    }
+
+    return serverMap;
   }
 }
-
-// Example usage
-async function runExample() {
-  try {
-    const registry = new inMemoryRegistry();
-    await registry.initialize();
-
-    // Add some tools
-    await registry.addTool(
-      new FakeTool(
-        "tool1",
-        "TextSummarizer",
-        "Summarizes long text into concise bullet points.",
-        "https://example.com/text-summarization",
-      ),
-    );
-
-    await registry.addTool(
-      new FakeTool(
-        "tool2",
-        "ImageAnalyzer",
-        "Analyzes images to extract objects, text, and sentiment.",
-        "https://example.com/image-analysis",
-      ),
-    );
-
-    await registry.addTool(
-      new FakeTool(
-        "tool3",
-        "DataVisualizer",
-        "Creates charts and graphs from tabular data.",
-        "https://example.com/data-visualization",
-      ),
-    );
-
-    await registry.addTool(
-      new FakeTool(
-        "tool4",
-        "SentimentAnalyzer",
-        "Analyzes text to determine sentiment.",
-        "https://example.com/sentiment-analysis",
-      ),
-    );
-
-    await registry.addTool(
-      new FakeTool(
-        "tool5",
-        "TextSummarizer",
-        "Summarizes long texts into concise summaries.",
-        "https://example.com/text-summarization",
-      ),
-    );
-
-    // Search for tools
-    console.log("\nSearching for analysis tools:");
-    const analysisTools = await registry.queryTools("analyze data", 2);
-    analysisTools.forEach((tool, i) => {
-      console.log(`\n--- Result ${i + 1} ---`);
-      console.log(`Name: ${tool.name}`);
-      console.log(`Description: ${tool.description}`);
-      console.log(`ID: ${tool.id}`);
-    });
-
-    // Delete a tool by name
-    console.log("\nDeleting DataVisualizer tool:");
-    await registry.deleteToolByName("DataVisualizer");
-
-    // Search again
-    console.log("\nSearching again after deletion:");
-    const remainingTools = await registry.queryTools("visualize", 2);
-    remainingTools.forEach((tool, i) => {
-      console.log(`\n--- Result ${i + 1} ---`);
-      console.log(`Name: ${tool.name}`);
-      console.log(`Description: ${tool.description}`);
-    });
-
-    // List all tools
-    console.log("\nAll remaining tools:");
-    const allTools = await registry.listTools();
-    allTools.forEach((tool, i) => {
-      console.log(`${i + 1}. ${tool.name} (${tool.id})`);
-    });
-  } catch (error) {
-    console.error("Error:", error);
-  }
-}
-
-runExample();
