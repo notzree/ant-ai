@@ -1,5 +1,11 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Tool } from "@anthropic-ai/sdk/resources/index.mjs";
+import { MCPServer } from "../mcpServer/server";
+// Extended Tool interface to include server information in metadata
+export interface ToolWithServerInfo {
+  tool: Tool;
+  server: MCPServer;
+}
 
 export const ToolsFromClient = async (
   client: Client,

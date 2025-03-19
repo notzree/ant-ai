@@ -5,6 +5,15 @@ import {
   type ConnectionOptions,
 } from "../shared/connector/connector";
 import { MCPServer } from "../shared/mcpServer/server";
+import type { ToolWithServerInfo } from "../shared/tools/tool";
+
+/**
+ * A generic type that wraps a result type with its raw JSON representation
+ */
+export type WithRawResult<T> = {
+  result: T;
+  rawResult: string;
+};
 
 export class RegistryClient {
   private connector: Connector = new Connector();
@@ -82,6 +91,23 @@ export class RegistryClient {
   }
 
   /**
+   * Find the JSON content from response
+   * @private
+   */
+  private getJsonContent(result: any): string {
+    // Find the content item marked as JSON
+    const jsonItem = result.content.find(
+      (item: any) => item.type === "text" && item.isJson === true,
+    );
+
+    if (!jsonItem) {
+      throw new Error("Response does not contain JSON data");
+    }
+
+    return jsonItem.text;
+  }
+
+  /**
    * Query tools based on a search string
    * @param query The search query
    * @param limit Optional maximum number of results
@@ -89,36 +115,47 @@ export class RegistryClient {
   public async queryTools(args: {
     query: string;
     limit?: number;
-  }): Promise<Map<MCPServer, Tool[]>> {
+  }): Promise<WithRawResult<ToolWithServerInfo[]>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
-
     const result = await this.registry.callTool({
       name: "query-tools",
       arguments: args,
     });
-
     if (result === undefined) {
       throw new Error(
         `Registry failed to queryTools with args: ${JSON.stringify(args)}`,
       );
     }
 
-    // The server returns JSON as a string in the text field
     try {
-      const toolsData = JSON.parse(result.content[0].text);
-      // Create a map with a single entry for the registry server
-      const toolsMap = new Map<MCPServer, Tool[]>();
+      // Get the JSON content
+      const rawResult = this.getJsonContent(result);
 
-      // Create a proper MCPServer object
-      const registryServer = new MCPServer("registry", "sse"); // only SSE servers for now.
-      toolsMap.set(registryServer, toolsData);
+      // Parse the JSON string to an array of ToolWithServerInfo
+      const parsedData = JSON.parse(rawResult) as Array<ToolWithServerInfo>;
 
-      return toolsMap;
+      // Convert each plain object to proper ToolWithServerInfo with MCPServer instances
+      const tools = parsedData.map((item) => ({
+        tool: item.tool,
+        server: new MCPServer(
+          item.server.url,
+          item.server.type,
+          item.server.authToken,
+        ),
+      }));
+
+      return {
+        result: tools,
+        rawResult,
+      };
     } catch (error) {
       console.error("Error parsing queryTools result:", error);
-      return new Map();
+      return {
+        result: [],
+        rawResult: "[]",
+      };
     }
   }
 
@@ -126,7 +163,7 @@ export class RegistryClient {
    * Add a new tool to the registry
    * @param tool The tool definition to add
    */
-  public async addTool(tool: Tool): Promise<Tool> {
+  public async addTool(tool: Tool): Promise<WithRawResult<Tool>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
@@ -140,21 +177,21 @@ export class RegistryClient {
       throw new Error(`Failed to add tool: ${JSON.stringify(tool)}`);
     }
 
-    // Extract the tool from the response
-    const responseText = result.content[0].text;
-    const match = responseText.match(/Tool added successfully:\n(.*)/s);
-    if (match) {
-      try {
-        const addedTool = JSON.parse(match[1]);
-        return addedTool;
-      } catch (error) {
-        console.error("Error parsing addTool result:", error);
-      }
-    }
+    try {
+      // Get the JSON content
+      const rawResult = this.getJsonContent(result);
 
-    throw new Error(
-      `Unexpected response format from add-tool: ${responseText}`,
-    );
+      // Parse the JSON string
+      const addedTool = JSON.parse(rawResult);
+
+      return {
+        result: addedTool,
+        rawResult,
+      };
+    } catch (error) {
+      console.error("Error parsing addTool result:", error);
+      throw new Error(`Failed to parse add-tool response: ${error}`);
+    }
   }
 
   /**
@@ -165,7 +202,7 @@ export class RegistryClient {
   public async addServer(
     serverUrl: string,
     type: "stdio" | "sse",
-  ): Promise<Tool[]> {
+  ): Promise<WithRawResult<Tool[]>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
@@ -179,27 +216,29 @@ export class RegistryClient {
       throw new Error(`Failed to add server: ${serverUrl}`);
     }
 
-    // Extract the added tools from the response
-    const responseText = result.content[0].text;
-    const match = responseText.match(/Added .* tools from server .*:\n(.*)/s);
-    if (match) {
-      try {
-        const addedTools = JSON.parse(match[1]);
-        return addedTools;
-      } catch (error) {
-        console.error("Error parsing addServer result:", error);
-      }
-    }
+    try {
+      // Get the JSON content
+      const rawResult = this.getJsonContent(result);
 
-    throw new Error(
-      `Unexpected response format from add-server: ${responseText}`,
-    );
+      // Parse the JSON string
+      const addedTools = JSON.parse(rawResult);
+
+      return {
+        result: addedTools,
+        rawResult,
+      };
+    } catch (error) {
+      console.error("Error parsing addServer result:", error);
+      throw new Error(`Failed to parse add-server response: ${error}`);
+    }
   }
 
   /**
    * List all tools in the registry
    */
-  public async listTools(args: any = {}): Promise<{ tools: Tool[] }> {
+  public async listTools(
+    args: any = {},
+  ): Promise<WithRawResult<{ tools: Tool[] }>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
@@ -213,33 +252,31 @@ export class RegistryClient {
       throw new Error("Failed to list tools");
     }
 
-    // Extract the tools from the response
-    const responseText = result.content[0].text;
-    const match = responseText.match(/Found .* tools:\n(.*)/s);
-    if (match) {
-      try {
-        const tools = JSON.parse(match[1]);
-        return { tools };
-      } catch (error) {
-        console.error("Error parsing listTools result:", error);
-      }
-    }
+    try {
+      // Get the JSON content
+      const rawResult = this.getJsonContent(result);
 
-    // Handle the case where no tools are found
-    if (responseText.includes("No tools found")) {
-      return { tools: [] };
-    }
+      // Parse the JSON string
+      const tools = JSON.parse(rawResult);
 
-    throw new Error(
-      `Unexpected response format from list-tools: ${responseText}`,
-    );
+      return {
+        result: { tools },
+        rawResult,
+      };
+    } catch (error) {
+      console.error("Error parsing listTools result:", error);
+      return {
+        result: { tools: [] },
+        rawResult: "[]",
+      };
+    }
   }
 
   /**
    * Delete a tool from the registry
    * @param name The name of the tool to delete
    */
-  public async deleteTool(name: string): Promise<boolean> {
+  public async deleteTool(name: string): Promise<WithRawResult<boolean>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
@@ -253,9 +290,20 @@ export class RegistryClient {
       throw new Error(`Failed to delete tool: ${name}`);
     }
 
-    const responseText = result.content[0].text;
-    const success = responseText.includes("deleted successfully");
+    try {
+      // Get the JSON content
+      const rawResult = this.getJsonContent(result);
 
-    return success;
+      // Parse the JSON string
+      const success = JSON.parse(rawResult);
+
+      return {
+        result: success,
+        rawResult,
+      };
+    } catch (error) {
+      console.error("Error parsing deleteTool result:", error);
+      throw new Error(`Failed to parse delete-tool response: ${error}`);
+    }
   }
 }

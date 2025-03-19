@@ -8,7 +8,16 @@ export class MCPServer {
     this.type = type;
     this.authToken = authToken;
   }
+
   public getId(): string {
     return `${this.url}::${this.type}`;
+  }
+
+  public equals(other: MCPServer): boolean {
+    if (!(other instanceof MCPServer)) {
+      return false;
+    }
+
+    return this.getId() === other.getId();
   }
 }

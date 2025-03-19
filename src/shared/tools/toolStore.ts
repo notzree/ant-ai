@@ -4,6 +4,7 @@ import { Connector, type ConnectionOptions } from "../connector/connector";
 import { LRUCache } from "lru-cache";
 import { MCPServer } from "../mcpServer/server";
 import type { RegistryClient } from "../../registry/registryClient";
+import type { ToolWithServerInfo } from "./tool";
 
 // Define a type for tool execution result
 export interface ToolExecutionResult {
@@ -121,28 +122,24 @@ export class ToolStore {
 
   /**
    * Register tools without immediately connecting to their servers
-   * @param serverToolsMap Map of MCP servers to their tools
-   * @param toolHandlers Optional map of tool handlers
+   * @param toolsWithServerInfo Array of tools with their server information
+   * @returns Array of registered tools
    */
-  registerTools(serverToolsMap: Map<MCPServer, Tool[]>): Tool[] {
+  registerTools(toolsWithServerInfo: ToolWithServerInfo[]): Tool[] {
     const newTools: Tool[] = [];
-    console.error(serverToolsMap);
-    // Process each server and its tools
-    for (const [server, tools] of serverToolsMap.entries()) {
-      for (const tool of tools) {
-        // Create the Anthropic tool format
 
-        // Add to available tools
-        this.availableTools.push(tool);
-        newTools.push(tool);
+    // Process each tool with its server info
+    for (const { tool, server } of toolsWithServerInfo) {
+      // Add to available tools
+      this.availableTools.push(tool);
+      newTools.push(tool);
 
-        // Store server info for lazy connection
-        this.toolServerInfo.set(tool.name, {
-          serverUrl: server.url,
-          serverType: server.type,
-          authToken: server.authToken,
-        });
-      }
+      // Store server info for lazy connection
+      this.toolServerInfo.set(tool.name, {
+        serverUrl: server.url,
+        serverType: server.type,
+        authToken: server.authToken,
+      });
     }
 
     console.log(`Registered ${newTools.length} tools for lazy initialization`);
@@ -206,19 +203,19 @@ export class ToolStore {
         // since we would need to update this huge if statement chain, the registryClient, the mcpServer, and the registry each time we make a change.
         if (toolName === "query-tools") {
           const result = await this.rc.queryTools(toolArgs);
-          this.registerTools(result);
+          this.registerTools(result.result);
           return {
-            rawResult: JSON.stringify(result),
+            rawResult: result.rawResult,
           };
         } else if (toolName === "list-tools") {
           const result = await this.rc.listTools(toolArgs);
           return {
-            rawResult: JSON.stringify(result),
+            rawResult: result.rawResult,
           };
         } else if (toolName === "add-tool") {
           const result = await this.rc.addTool(toolArgs.tool);
           return {
-            rawResult: JSON.stringify(result),
+            rawResult: result.rawResult,
           };
         } else if (toolName === "add-server") {
           const result = await this.rc.addServer(
@@ -226,12 +223,12 @@ export class ToolStore {
             toolArgs.type,
           );
           return {
-            rawResult: JSON.stringify(result),
+            rawResult: result.rawResult,
           };
         } else if (toolName === "delete-tool") {
           const result = await this.rc.deleteTool(toolArgs.name);
           return {
-            rawResult: JSON.stringify(result),
+            rawResult: result.rawResult,
           };
         } else {
           throw new Error(`Unsupported registry tool ${toolName}`);
