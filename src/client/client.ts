@@ -20,7 +20,7 @@ if (!ANTHROPIC_API_KEY) {
 }
 const ANT_VERSION = process.env.ANT_VERSION || "1.0.0";
 const MODEL_NAME = process.env.MODEL_NAME || "claude-3-5-sonnet-20241022";
-const MAX_RECURSION_DEPTH = 3; // Maximum number of re-evaluations
+const MAX_RECURSION_DEPTH = 10; // Maximum number of re-evaluations
 
 export class AntClient {
   private memory: BufferMemory;
@@ -75,10 +75,8 @@ export class AntClient {
           `[Maximum re-evaluation depth reached (${MAX_RECURSION_DEPTH}). Finalizing response.]`,
         );
 
-        // Return all accumulated responses
         const finalResponse = previousResponses.join("\n\n");
 
-        // Save to chat history on final return only
         if (recursionDepth === 0) {
           this.chatHistory.push(new AIMessage(finalResponse));
           await this.memory.saveContext(
@@ -145,13 +143,22 @@ export class AntClient {
         model: MODEL_NAME,
         max_tokens: 1000,
         messages,
+        system:
+          "When you have completed all steps of a task and no further action is needed, include 'TASK COMPLETE' or 'FINAL ANSWER' in your response.",
         tools: this.toolStore.getAvailableTools(),
       });
-
+      let toolCallsMade = 0;
+      let taskComplete = false;
       // Process response and handle tool calls
       for (const content of response.content) {
         if (content.type === "text") {
           responseElements.push(content.text);
+          if (
+            content.text.includes("TASK COMPLETE") ||
+            content.text.includes("FINAL ANSWER")
+          ) {
+            taskComplete = true;
+          }
         } else if (content.type === "tool_use") {
           const toolName = content.name;
           const toolArgs = content.input as
@@ -235,6 +242,7 @@ export class AntClient {
               `${levelPrefix}Error calling tool ${toolName}: ${error.message}`,
             );
           }
+          toolCallsMade++;
         }
       }
 
@@ -252,8 +260,12 @@ export class AntClient {
       const finalToolCount = this.toolStore.getAvailableTools().length;
       const newToolsAdded = finalToolCount > initialToolCount;
 
-      if (newToolsAdded) {
-        // If new tools were added, recursively process the query again
+      if (
+        (toolCallsMade > 0 || newToolsAdded) &&
+        !taskComplete &&
+        recursionDepth < MAX_RECURSION_DEPTH
+      ) {
+        // Continue processing the query
         return this.processQuery(
           query,
           recursionDepth + 1,
@@ -262,10 +274,9 @@ export class AntClient {
           allResponses,
         );
       } else {
-        // No new tools added, return the final response
+        // Task is complete or no further action needed
         const finalResponse = allResponses.join("\n\n");
 
-        // Save to chat history on final return only
         if (recursionDepth === 0) {
           this.chatHistory.push(new AIMessage(finalResponse));
           await this.memory.saveContext(
