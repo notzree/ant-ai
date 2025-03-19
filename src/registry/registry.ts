@@ -2,7 +2,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 // import { AntTool } from "../shared/tools/tool.js";
 import type { MCPServer } from "../shared/mcpServer/server.js";
 import type { Tool } from "@anthropic-ai/sdk/resources/index.mjs";
-
+import type { ToolWithServerInfo } from "../shared/tools/tool.js";
 /**
  * Registry interface for managing AI assistant tools
  */
@@ -14,7 +14,7 @@ export interface Registry {
    * @param limit - Maximum number of results to return (default: 5)
    * @returns Promise resolving to an array of mcp servers to connect to.
    */
-  queryTools(query: string, limit?: number): Promise<Map<MCPServer, Tool[]>>;
+  queryTools(query: string, limit?: number): Promise<ToolWithServerInfo[]>;
 
   /**
    * Add a tool to the registry
@@ -32,7 +32,7 @@ export interface Registry {
    * @param type - Type of connection to the server ("stdio" or "sse")
    * @returns Promise resolving to an array of added tools
    */
-  addServer(serverUrl: string, type: "stdio" | "sse"): Promise<Tool[]>;
+  addServer(serverUrl: string, authToken?: string): Promise<Tool[]>;
 
   /**
    * List all tools in the registry

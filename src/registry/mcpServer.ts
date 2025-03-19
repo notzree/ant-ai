@@ -41,9 +41,11 @@ export class RegistryMcpServer {
     // Tool: Query tools in the registry
     this.server.tool(
       "query-tools",
-      "Search for tools based on a query string",
+      "Search for tools based on a query string and add the resulting tools to your list of available tools.",
       {
-        query: z.string().describe("The search query"),
+        query: z
+          .string()
+          .describe("The search query describing the required actions"),
         limit: z
           .number()
           .optional()
@@ -52,11 +54,24 @@ export class RegistryMcpServer {
       async ({ query, limit }) => {
         try {
           const tools = await this.registry.queryTools(query, limit);
+          // Convert the tools into a serializable array of ToolWithServerInfo
+          const serializableTools = tools.map((item) => ({
+            tool: item.tool,
+            server: {
+              url: item.server.url,
+              type: item.server.type,
+              authToken: item.server.authToken,
+            },
+          }));
+
+          const jsonString = JSON.stringify(serializableTools);
+
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify(tools, null, 2),
+                text: jsonString,
+                isJson: true,
               },
             ],
           };
@@ -66,6 +81,11 @@ export class RegistryMcpServer {
             content: [
               {
                 type: "text",
+                text: JSON.stringify(null),
+                isJson: true,
+              },
+              {
+                type: "text",
                 text: `Error querying tools: ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
@@ -73,55 +93,66 @@ export class RegistryMcpServer {
         }
       },
     );
-
-    // Tool: Add a tool to the registry
+    // Tool: Add multiple servers concurrently to the registry
     this.server.tool(
-      "add-tool",
-      "Add a new tool to the registry",
+      "add-servers-concurrently",
+      "Add tools from multiple MCP servers concurrently",
       {
-        tool: z
-          .object({
-            name: z.string().describe("Name of the tool"),
-            description: z.string().describe("Description of the tool"),
-            input_schema: z
-              .object({
-                type: z
-                  .literal("object")
-                  .describe(
-                    "Must be 'object' for Anthropic Tool compatibility",
-                  ),
-                properties: z
-                  .record(z.any())
-                  .optional()
-                  .describe("Properties of the input schema"),
-                required: z
-                  .array(z.string())
-                  .optional()
-                  .describe("Required properties"),
-              })
-              .passthrough()
-              .describe("Schema defining the input parameters for the tool"),
-          })
-          .describe("The tool to add"),
+        serverStrings: z
+          .array(z.string())
+          .describe(
+            "Array of server strings in format 'url::type' where type is 'stdio' or 'sse'",
+          ),
+        authTokens: z
+          .record(z.string())
+          .optional()
+          .describe(
+            "Optional map of server URLs to their authentication tokens",
+          ),
       },
-      async ({ tool }) => {
+      async ({ serverStrings, authTokens }) => {
         try {
-          const addedTool = await this.registry.addTool(tool);
+          // Convert record to Map if authTokens is provided
+          const authTokensMap = authTokens
+            ? new Map(Object.entries(authTokens))
+            : undefined;
+
+          const result = await this.registry.addServersConcurrently(
+            serverStrings,
+            authTokensMap,
+          );
+
+          // Calculate total number of tools added
+          let totalTools = 0;
+          result.forEach((tools) => {
+            totalTools += tools.length;
+          });
+
           return {
             content: [
               {
                 type: "text",
-                text: `Tool added successfully:\n${JSON.stringify(addedTool, null, 2)}`,
+                text: JSON.stringify(Array.from(result.entries())),
+                isJson: true,
+              },
+              {
+                type: "text",
+                text: `Added ${totalTools} tools from ${serverStrings.length} servers concurrently`,
               },
             ],
           };
         } catch (error) {
-          console.error("Error adding tool:", error);
+          console.error("Error adding servers concurrently:", error);
           return {
             content: [
               {
                 type: "text",
-                text: `Error adding tool: ${error instanceof Error ? error.message : String(error)}`,
+                text: JSON.stringify(null),
+                isJson: true,
+              },
+              {
+                type: "text",
+                text: `Error adding servers concurrently: ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
           };
@@ -134,19 +165,32 @@ export class RegistryMcpServer {
       "add-server",
       "Add all tools from an MCP server to the registry",
       {
-        serverUrl: z.string().describe("URL of the MCP server to add"),
-        type: z
-          .enum(["stdio", "sse"])
-          .describe("Type of the server connection (stdio or sse)"),
+        serverString: z
+          .string()
+          .describe(
+            "Server string in format 'url::type' where type is 'stdio' or 'sse'",
+          ),
+        authToken: z
+          .string()
+          .optional()
+          .describe("Optional authentication token for the server"),
       },
-      async ({ serverUrl, type }) => {
+      async ({ serverString, authToken }) => {
         try {
-          const addedTools = await this.registry.addServer(serverUrl, type);
+          const addedTools = await this.registry.addServer(
+            serverString,
+            authToken,
+          );
           return {
             content: [
               {
                 type: "text",
-                text: `Added ${addedTools.length} tools from server ${serverUrl}:\n${JSON.stringify(addedTools, null, 2)}`,
+                text: JSON.stringify(addedTools),
+                isJson: true,
+              },
+              {
+                type: "text",
+                text: `Added ${addedTools.length} tools from server ${serverString.split("::")[0]}`,
               },
             ],
           };
@@ -154,6 +198,11 @@ export class RegistryMcpServer {
           console.error("Error adding server:", error);
           return {
             content: [
+              {
+                type: "text",
+                text: JSON.stringify(null),
+                isJson: true,
+              },
               {
                 type: "text",
                 text: `Error adding server: ${error instanceof Error ? error.message : String(error)}`,
@@ -167,19 +216,23 @@ export class RegistryMcpServer {
     // Tool: List all tools in the registry
     this.server.tool(
       "list-tools",
-      "List all tools in the registry",
+      "Preview all of the tools available in the registry. These tools require you to query the registry to use them.",
       {},
       async () => {
         try {
           const tools = await this.registry.listTools();
-          // console.log(`{${JSON.stringify(tools, null, 2)}}`);
           return {
             content: [
               {
                 type: "text",
+                text: JSON.stringify(tools),
+                isJson: true,
+              },
+              {
+                type: "text",
                 text:
                   tools.length > 0
-                    ? `Found ${tools.length} tools:\n${JSON.stringify(tools, null, 2)}`
+                    ? `Found ${tools.length} tools`
                     : "No tools found in the registry.",
               },
             ],
@@ -188,6 +241,11 @@ export class RegistryMcpServer {
           console.error("Error listing tools:", error);
           return {
             content: [
+              {
+                type: "text",
+                text: JSON.stringify(null),
+                isJson: true,
+              },
               {
                 type: "text",
                 text: `Error listing tools: ${error instanceof Error ? error.message : String(error)}`,
@@ -212,6 +270,11 @@ export class RegistryMcpServer {
             content: [
               {
                 type: "text",
+                text: JSON.stringify(success),
+                isJson: true,
+              },
+              {
+                type: "text",
                 text: success
                   ? `Tool '${name}' deleted successfully.`
                   : `Tool '${name}' not found or could not be deleted.`,
@@ -222,6 +285,11 @@ export class RegistryMcpServer {
           console.error("Error deleting tool:", error);
           return {
             content: [
+              {
+                type: "text",
+                text: JSON.stringify(null),
+                isJson: true,
+              },
               {
                 type: "text",
                 text: `Error deleting tool: ${error instanceof Error ? error.message : String(error)}`,
@@ -257,23 +325,11 @@ export async function startRegistryServer(registry: Registry): Promise<void> {
 async function main() {
   const registry = new inMemoryRegistry();
   await registry.initialize();
-  // await registry.addServer(
-  //   "/Users/notzree/code/Personal/AI-thing/src/server.py",
-  //   "stdio",
-  // );
-  // TODO: add a method to addServer in parallel
-  // await registry.addServer(
-  //   "https://mcp.composio.dev/browserbase_tool/few-sticky-animal-ZVQ1XF",
-  //   "sse",
-  // );
-  // await registry.addServer(
-  //   "https://mcp.composio.dev/gmail/wonderful-odd-gigabyte-aJZbFe",
-  //   "sse",
-  // );
-  await registry.addServer(
-    "https://mcp.composio.dev/googledocs/wonderful-odd-gigabyte-aJZbFe",
-    "sse",
-  );
+  await registry.addServersConcurrently([
+    "https://mcp.composio.dev/browserbase_tool/few-sticky-animal-ZVQ1XF::sse",
+    "https://mcp.composio.dev/gmail/wonderful-odd-gigabyte-aJZbFe::sse",
+    "https://mcp.composio.dev/googledocs/wonderful-odd-gigabyte-aJZbFe::sse",
+  ]);
   startRegistryServer(registry).catch((error) => {
     console.error("Fatal error in main():", error);
     process.exit(1);
