@@ -13,6 +13,8 @@ import { ToolStore } from "../shared/tools/toolStore";
 import { type ConnectionOptions } from "../shared/connector/connector";
 import { BaseMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
 import { RegistryClient } from "../registry/registryClient";
+import fs from "fs";
+import path from "path";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 if (!ANTHROPIC_API_KEY) {
@@ -27,6 +29,8 @@ export class AntClient {
   private anthropic: Anthropic;
   private toolStore: ToolStore;
   private chatHistory: BaseMessage[] = [];
+  private logFile: string;
+  private logStream: fs.WriteStream;
 
   constructor(rc: RegistryClient) {
     this.anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
@@ -35,6 +39,20 @@ export class AntClient {
       returnMessages: true,
     });
     this.toolStore = new ToolStore(rc);
+
+    // Create log file with timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    this.logFile = path.join(process.cwd(), `ant-chat-${timestamp}.log`);
+    this.logStream = fs.createWriteStream(this.logFile, { flags: "a" });
+    this.log(`Log session started at ${new Date().toISOString()}`);
+  }
+
+  /**
+   * Log message to the log file
+   */
+  private log(message: string) {
+    const timestamp = new Date().toISOString();
+    this.logStream.write(`[${timestamp}] ${message}\n`);
   }
 
   async connectToServer(url: string, type: "sse" | "stdio") {
@@ -45,11 +63,38 @@ export class AntClient {
       appVersion: ANT_VERSION,
     };
     try {
+      this.log(`Connecting to MCP server at ${url}`);
       this.toolStore.connectToServer(opts);
+      this.log(`Successfully connected to MCP server at ${url}`);
     } catch (e) {
-      console.log(`Failed to connect to MCP server ${url}: `, e);
+      const errorMsg = `Failed to connect to MCP server ${url}: ${e}`;
+      this.log(errorMsg);
+      console.log(errorMsg);
       throw e;
     }
+  }
+
+  /**
+   * Extract clean user-facing text from response elements
+   * @param responseElements Array of response elements including logs and LLM text
+   * @returns Clean text intended for user display
+   */
+  private extractUserFacingText(responseElements: string[]): string {
+    // Filter out lines that are clearly logs
+    return responseElements
+      .filter(
+        (line) =>
+          !line.includes("Calling tool") &&
+          !line.includes("Tool") &&
+          !line.includes("returned") &&
+          !line.includes("[Re-evaluation") &&
+          !line.includes("Processing with") &&
+          !line.includes("tools added") &&
+          !line.includes("=== Re-evaluation Level"),
+      )
+      .join("\n")
+      .replace(/TASK COMPLETE|FINAL ANSWER/g, "") // Remove task completion markers
+      .trim();
   }
 
   /**
@@ -67,25 +112,34 @@ export class AntClient {
     previousMessages: MessageParam[] = [],
     previousTools: number = 0,
     previousResponses: string[] = [],
-  ): Promise<string> {
+  ): Promise<{
+    fullLogs: string;
+    userResponse: string;
+    needsUserInput?: boolean;
+  }> {
     try {
+      this.log(
+        `Processing query at recursion depth ${recursionDepth}: ${query}`,
+      );
+
       // Stop if we've reached max recursion depth
       if (recursionDepth >= MAX_RECURSION_DEPTH) {
-        previousResponses.push(
-          `[Maximum re-evaluation depth reached (${MAX_RECURSION_DEPTH}). Finalizing response.]`,
-        );
+        const depthMessage = `[Maximum re-evaluation depth reached (${MAX_RECURSION_DEPTH}). Finalizing response.]`;
+        this.log(depthMessage);
+        previousResponses.push(depthMessage);
 
-        const finalResponse = previousResponses.join("\n\n");
+        const fullLogs = previousResponses.join("\n\n");
+        const userResponse = this.extractUserFacingText(previousResponses);
 
         if (recursionDepth === 0) {
-          this.chatHistory.push(new AIMessage(finalResponse));
+          this.chatHistory.push(new AIMessage(userResponse));
           await this.memory.saveContext(
             { input: query },
-            { output: finalResponse },
+            { output: userResponse },
           );
         }
 
-        return finalResponse;
+        return { fullLogs, userResponse };
       }
 
       // Prepare conversation messages
@@ -107,19 +161,24 @@ export class AntClient {
 
         // Add the user's query to chat history on first execution only
         this.chatHistory.push(new HumanMessage(query));
+        this.log(`Added user query to chat history: ${query}`);
       } else {
         // For recursion: use provided messages and add re-evaluation instruction
+        const reEvalPrompt = `New tools have been added since your last response. Please re-evaluate the original query with your expanded toolset (recursion level: ${recursionDepth}): "${query}"`;
+        this.log(`Re-evaluation prompt: ${reEvalPrompt}`);
+
         messages = [
           ...previousMessages,
           {
             role: "user",
-            content: `New tools have been added since your last response. Please re-evaluate the original query with your expanded toolset (recursion level: ${recursionDepth}): "${query}"`,
+            content: reEvalPrompt,
           },
         ];
       }
 
       // Get current available tools count
       const initialToolCount = this.toolStore.getAvailableTools().length;
+      this.log(`Available tools count: ${initialToolCount}`);
 
       // Log recursion level and tool status
       const levelPrefix =
@@ -132,32 +191,48 @@ export class AntClient {
         // Show how many new tools were added
         const newToolsCount = initialToolCount - previousTools;
         if (newToolsCount > 0) {
-          responseElements.push(
-            `${levelPrefix}${newToolsCount} new tools added since last evaluation`,
-          );
+          const newToolsMsg = `${levelPrefix}${newToolsCount} new tools added since last evaluation`;
+          responseElements.push(newToolsMsg);
+          this.log(newToolsMsg);
         }
       }
 
       // Call the model
+      this.log(`Calling model ${MODEL_NAME} with ${messages.length} messages`);
       const response = await this.anthropic.messages.create({
         model: MODEL_NAME,
         max_tokens: 1000,
         messages,
         system:
-          "When you have completed all steps of a task and no further action is needed, include 'TASK COMPLETE' or 'FINAL ANSWER' in your response.",
+          "When you have completed all steps of a task and no further action is needed, include 'TASK COMPLETE' or 'FINAL ANSWER' in your response. " +
+          "If you need specific information from the user to proceed (like API keys, authorization, or clarification), include 'NEED_USER_INPUT:' followed by your specific request.",
         tools: this.toolStore.getAvailableTools(),
       });
+
       let toolCallsMade = 0;
       let taskComplete = false;
+      let needsUserInput = false;
+      let userInputRequest = "";
+
       // Process response and handle tool calls
       for (const content of response.content) {
         if (content.type === "text") {
           responseElements.push(content.text);
+          this.log(
+            `LLM text response: ${content.text.substring(0, 100)}${content.text.length > 100 ? "..." : ""}`,
+          );
+          if (content.text.includes("NEED_USER_INPUT")) {
+            needsUserInput = true;
+            userInputRequest = content.text;
+            this.log(`LLM requires user input: ${content.text}...`);
+          }
+
           if (
             content.text.includes("TASK COMPLETE") ||
             content.text.includes("FINAL ANSWER")
           ) {
             taskComplete = true;
+            this.log("Task marked as complete by LLM");
           }
         } else if (content.type === "tool_use") {
           const toolName = content.name;
@@ -168,9 +243,9 @@ export class AntClient {
             content.id ||
             `tool_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 
-          responseElements.push(
-            `${levelPrefix}Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}`,
-          );
+          const toolCallMsg = `${levelPrefix}Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}`;
+          responseElements.push(toolCallMsg);
+          this.log(toolCallMsg);
 
           try {
             const { rawResult } = await this.toolStore.executeTool(
@@ -178,9 +253,9 @@ export class AntClient {
               toolArgs,
             );
 
-            responseElements.push(
-              `${levelPrefix}Tool ${toolName} returned ${JSON.stringify(rawResult)}`,
-            );
+            const toolResultMsg = `${levelPrefix}Tool ${toolName} returned ${JSON.stringify(rawResult)}`;
+            responseElements.push(toolResultMsg);
+            this.log(toolResultMsg);
 
             // Construct the tool response pathway
             const assistantTextBlock: TextBlockParam = {
@@ -223,6 +298,7 @@ export class AntClient {
             ];
 
             // Call the API with the typed message array
+            this.log(`Calling model with tool result for ${toolName}`);
             const toolResponse = await this.anthropic.messages.create({
               model: MODEL_NAME,
               max_tokens: 1000,
@@ -236,11 +312,12 @@ export class AntClient {
                   ? toolResponse.content[0].text
                   : "";
               responseElements.push(toolResponseText);
+              this.log(`Tool response from LLM: ${toolResponseText}`);
             }
           } catch (error) {
-            responseElements.push(
-              `${levelPrefix}Error calling tool ${toolName}: ${error.message}`,
-            );
+            const errorMsg = `${levelPrefix}Error calling tool ${toolName}: ${error.message}`;
+            responseElements.push(errorMsg);
+            this.log(errorMsg);
           }
           toolCallsMade++;
         }
@@ -252,7 +329,9 @@ export class AntClient {
       // Add current level's response to accumulated responses
       const allResponses = [...previousResponses];
       if (recursionDepth > 0) {
-        allResponses.push(`\n=== Re-evaluation Level ${recursionDepth} ===\n`);
+        const reEvalHeader = `\n=== Re-evaluation Level ${recursionDepth} ===\n`;
+        allResponses.push(reEvalHeader);
+        this.log(reEvalHeader);
       }
       allResponses.push(currentResponse);
 
@@ -260,12 +339,20 @@ export class AntClient {
       const finalToolCount = this.toolStore.getAvailableTools().length;
       const newToolsAdded = finalToolCount > initialToolCount;
 
+      if (newToolsAdded) {
+        this.log(
+          `New tools added during processing. Initial: ${initialToolCount}, Final: ${finalToolCount}`,
+        );
+      }
+
       if (
         (toolCallsMade > 0 || newToolsAdded) &&
         !taskComplete &&
+        !needsUserInput &&
         recursionDepth < MAX_RECURSION_DEPTH
       ) {
         // Continue processing the query
+        this.log(`Continuing to next recursion level (${recursionDepth + 1})`);
         return this.processQuery(
           query,
           recursionDepth + 1,
@@ -275,24 +362,49 @@ export class AntClient {
         );
       } else {
         // Task is complete or no further action needed
-        const finalResponse = allResponses.join("\n\n");
+        this.log(`Processing complete at recursion depth ${recursionDepth}`);
+        const fullLogs = allResponses.join("\n\n");
+        let userResponse;
+        if (needsUserInput) {
+          // Extract the user input request, cleaning up the marker
+          const requestPattern = /NEED_USER_INPUT:?\s*(.+?)(?=\n\n|\n$|$)/s;
+          const match = userInputRequest.match(requestPattern);
 
+          if (match && match[1]) {
+            userResponse = match[1].trim();
+          } else {
+            userResponse = userInputRequest
+              .replace(/NEED_USER_INPUT:?/g, "")
+              .trim();
+          }
+
+          // Add a clear prefix
+          userResponse =
+            "I need additional information to proceed: " + userResponse;
+        } else {
+          userResponse = this.extractUserFacingText(allResponses);
+        }
+
+        // Update chat history (if at top level)
         if (recursionDepth === 0) {
-          this.chatHistory.push(new AIMessage(finalResponse));
+          this.chatHistory.push(new AIMessage(userResponse));
           await this.memory.saveContext(
             { input: query },
-            { output: finalResponse },
+            { output: userResponse },
           );
         }
 
-        return finalResponse;
+        // Return with an indicator if user input is needed
+        return { fullLogs, userResponse, needsUserInput };
       }
     } catch (error) {
-      console.error(
-        `Error processing query (recursion depth ${recursionDepth}):`,
-        error,
-      );
-      return `Error: ${error.message}`;
+      const errorMsg = `Error processing query (recursion depth ${recursionDepth}): ${error.message}`;
+      console.error(errorMsg);
+      this.log(errorMsg);
+      return {
+        fullLogs: errorMsg,
+        userResponse: `Error: ${error.message}`,
+      };
     }
   }
 
@@ -304,23 +416,35 @@ export class AntClient {
 
     try {
       console.log("\nMCP Client Started with persistent memory!");
+      console.log(`Logs being saved to: ${this.logFile}`);
       console.log("Type your queries or 'quit' to exit.");
+      this.log("Chat loop started");
 
       while (true) {
         const message = await rl.question("\nQuery: ");
         if (message.toLowerCase() === "quit") {
+          this.log("User requested to quit");
           break;
         }
-        const response = await this.processQuery(message);
-        console.log("\n" + response);
+
+        this.log(`Received user query: ${message}`);
+        const { fullLogs, userResponse } = await this.processQuery(message);
+
+        // Log the full processing details but only show clean response to user
+        this.log(`Full processing logs:\n${fullLogs}`);
+        console.log("\n" + userResponse);
       }
     } finally {
       console.log("exiting...");
+      this.log("Chat loop ended");
+      this.logStream.end();
       rl.close();
     }
   }
 
   async cleanup() {
+    this.log("Cleaning up resources");
     await this.toolStore.cleanup();
+    this.logStream.end();
   }
 }
