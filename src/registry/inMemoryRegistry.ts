@@ -1,5 +1,5 @@
 import type { Registry } from "./registry";
-import { ToolsFromClient } from "../shared/tools/tool";
+import { ToolsFromClient, type ToolWithServerInfo } from "../shared/tools/tool";
 import type { Tool } from "@anthropic-ai/sdk/src/resources/index.js";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { Document } from "langchain/document";
@@ -9,13 +9,6 @@ import {
   type ConnectionOptions,
 } from "../shared/connector/connector";
 import { MCPServer } from "../shared/mcpServer/server";
-
-// Extended Tool interface to include server information in metadata
-interface ToolWithServerInfo {
-  tool: Tool;
-  server: MCPServer;
-}
-
 export class inMemoryRegistry implements Registry {
   private vectorStore: MemoryVectorStore | null = null;
   private embeddings: OpenAIEmbeddings;
@@ -39,29 +32,134 @@ export class inMemoryRegistry implements Registry {
   }
 
   /**
-   * Add a server and all its tools
-   * @param serverUrl - URL of the server to add
-   * @param type - Type of server connection (stdio or sse)
+   * Add multiple servers and their tools concurrently from string format
+   * @param serverStrings - Array of server strings in format "url::type" where type is 'sse' or 'stdio'
+   * @param authTokens - Optional map of server URLs to their authentication tokens
+   * @returns Map of server IDs to their added tools
+   */
+  public async addServersConcurrently(
+    serverStrings: string[],
+    authTokens?: Map<string, string>,
+  ): Promise<Map<string, Tool[]>> {
+    if (!this.vectorStore) {
+      throw new Error("Vector store not initialized");
+    }
+
+    // Parse server strings into config objects
+    const serverConfigs = serverStrings.map((serverString) => {
+      const [serverUrl, type] = serverString.split("::");
+
+      if (!serverUrl || !type) {
+        throw new Error(
+          `Invalid server string format: ${serverString}. Expected format: "url::type"`,
+        );
+      }
+
+      if (type !== "sse" && type !== "stdio") {
+        throw new Error(
+          `Invalid server type: ${type}. Expected 'sse' or 'stdio'`,
+        );
+      }
+
+      // Get the auth token for this specific server URL if it exists
+      const authToken = authTokens?.get(serverUrl);
+
+      return {
+        serverUrl,
+        type: type as "stdio" | "sse",
+        authToken,
+      };
+    });
+
+    const results = new Map<string, Tool[]>();
+
+    // Create promises for each server addition
+    const serverPromises = serverConfigs.map(async (config) => {
+      const { serverUrl, type, authToken } = config;
+
+      // Create server object
+      const server = new MCPServer(serverUrl, type, authToken);
+      const serverId = server.getId();
+      this.servers.set(serverId, server);
+
+      const connector = new Connector();
+      const opts: ConnectionOptions = {
+        type: type,
+        url: serverUrl,
+        appName: "ant",
+        appVersion: "1.0.0",
+        authToken: authToken,
+      };
+
+      try {
+        const client = await connector.connect(opts);
+        const tools = await ToolsFromClient(client, serverUrl);
+
+        // Create promises for each tool addition
+        const toolsArray = new Array(tools.length);
+        const toolPromises = tools.map(async (tool, index) => {
+          toolsArray[index] = await this.addTool(tool, server);
+        });
+
+        // Wait for all tools to be added
+        await Promise.all(toolPromises);
+
+        // Store the result
+        results.set(serverId, toolsArray);
+        return { serverId, tools: toolsArray };
+      } catch (error) {
+        console.error(
+          `Failed to connect to server ${serverUrl}: ${error.message}`,
+        );
+        // Still add the server to the results with an empty tools array
+        results.set(serverId, []);
+        return { serverId, tools: [] };
+      }
+    });
+
+    // Wait for all servers to be added concurrently
+    await Promise.all(serverPromises);
+
+    return results;
+  }
+
+  /**
+   * Add a server and all its tools using string format
+   * @param serverString - Server string in format "url::type" where type is 'sse' or 'stdio'
    * @param authToken - Optional authentication token
    * @returns Array of added tools
    */
   public async addServer(
-    serverUrl: string,
-    type: "stdio" | "sse",
+    serverString: string,
     authToken?: string,
   ): Promise<Tool[]> {
     if (!this.vectorStore) {
       throw new Error("Vector store not initialized");
     }
 
+    // Parse server string
+    const [serverUrl, type] = serverString.split("::");
+
+    if (!serverUrl || !type) {
+      throw new Error(
+        `Invalid server string format: ${serverString}. Expected format: "url::type"`,
+      );
+    }
+
+    if (type !== "sse" && type !== "stdio") {
+      throw new Error(
+        `Invalid server type: ${type}. Expected 'sse' or 'stdio'`,
+      );
+    }
+
     // Create server object
-    const server = new MCPServer(serverUrl, type, authToken);
+    const server = new MCPServer(serverUrl, type as "stdio" | "sse", authToken);
     const serverId = server.getId();
     this.servers.set(serverId, server);
 
     const connector = new Connector();
     const opts: ConnectionOptions = {
-      type: type,
+      type: type as "stdio" | "sse",
       url: serverUrl,
       appName: "ant",
       appVersion: "1.0.0",
@@ -71,11 +169,9 @@ export class inMemoryRegistry implements Registry {
     const client = await connector.connect(opts);
     const tools = await ToolsFromClient(client, serverUrl);
     const result = new Array(tools.length);
-
     const promises = tools.map(async (tool, index) => {
       result[index] = await this.addTool(tool, server);
     });
-
     await Promise.all(promises);
     return result;
   }
@@ -159,56 +255,48 @@ export class inMemoryRegistry implements Registry {
    * Search for tools based on a query string
    * @param query - The search query
    * @param limit - The maximum number of results to return (default: 5)
-   * @returns Map of MCPServer to Tool[] for relevant tools
+   * @returns Array of ToolWithServerInfo for relevant tools
    */
   public async queryTools(
     query: string,
     limit?: number,
-  ): Promise<Map<MCPServer, Tool[]>> {
+  ): Promise<ToolWithServerInfo[]> {
     if (!this.vectorStore) {
       await this.initialize();
-      return new Map(); // Return empty map
+      return []; // Return empty array
     }
-
     if (!limit) {
       // Default limit
-      limit = 5;
+      limit = 6;
     }
 
     // Perform similarity search
-    const results = await this.vectorStore.similaritySearch(query, limit);
-
-    // Group results by server
-    const serverToolsMap = new Map<string, Tool[]>();
-
-    for (const doc of results) {
-      try {
-        const serverId = doc.metadata.serverId as string;
-        const tool = JSON.parse(doc.metadata.toolData as string) as Tool;
-
-        if (!serverToolsMap.has(serverId)) {
-          serverToolsMap.set(serverId, []);
+    const results = await this.vectorStore.similaritySearch(
+      query + "\n Additionally, any relevant connection tools",
+      limit,
+    );
+    const tools: ToolWithServerInfo[] = results
+      .map((doc) => {
+        try {
+          const serverId = doc.metadata.serverId as string;
+          const mcpServer = this.servers.get(serverId);
+          if (!mcpServer) {
+            console.error(`Server with ID ${serverId} not found`);
+            return null;
+          }
+          const tool = JSON.parse(doc.metadata.toolData as string) as Tool;
+          return {
+            tool: tool,
+            server: mcpServer,
+          };
+        } catch (e) {
+          console.error(`Error parsing tool data for ${doc.metadata.name}:`, e);
+          return null;
         }
+      })
+      .filter((item): item is ToolWithServerInfo => item !== null);
 
-        serverToolsMap.get(serverId)!.push(tool);
-      } catch (e) {
-        console.error(`Error parsing tool data for ${doc.metadata.name}:`, e);
-      }
-    }
-
-    // Convert to the required Map<MCPServer, Tool[]> format
-    const resultMap = new Map<MCPServer, Tool[]>();
-
-    for (const [serverId, tools] of serverToolsMap.entries()) {
-      const server = this.servers.get(serverId);
-      if (server) {
-        resultMap.set(server, tools);
-      } else {
-        console.error(`Server with ID ${serverId} not found`);
-      }
-    }
-
-    return resultMap;
+    return tools;
   }
 
   /**
