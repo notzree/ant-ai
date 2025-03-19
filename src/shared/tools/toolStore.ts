@@ -25,7 +25,8 @@ export class ToolStore {
   private rc: RegistryClient;
 
   // All available tools (including those without connected clients)
-  private availableTools: Tool[] = [];
+  // private availableTools: Tool[] = [];
+  private availableTools: Map<string, Tool> = new Map();
 
   // Maps from tool name -> server info (for lazy connection)
   private toolServerInfo = new Map<string, ToolServerInfo>();
@@ -69,7 +70,7 @@ export class ToolStore {
    * Get all available tools
    */
   getAvailableTools(): Tool[] {
-    return [...this.availableTools, ...this.rc.registryTools];
+    return [...this.availableTools.values(), ...this.rc.registryTools];
   }
 
   /**
@@ -104,9 +105,8 @@ export class ToolStore {
           serverType: opts.type,
           authToken: opts.authToken,
         });
+        this.availableTools.set(tool.name, tool);
       }
-
-      this.availableTools = [...this.availableTools, ...newTools];
 
       console.log(
         `Connected to server ${opts.url} with tools:`,
@@ -125,13 +125,14 @@ export class ToolStore {
    * @param toolsWithServerInfo Array of tools with their server information
    * @returns Array of registered tools
    */
+  //TODO TODAY: Implement tool deduplication
   registerTools(toolsWithServerInfo: ToolWithServerInfo[]): Tool[] {
     const newTools: Tool[] = [];
 
     // Process each tool with its server info
     for (const { tool, server } of toolsWithServerInfo) {
       // Add to available tools
-      this.availableTools.push(tool);
+      this.availableTools.set(tool.name, tool);
       newTools.push(tool);
 
       // Store server info for lazy connection
@@ -204,8 +205,14 @@ export class ToolStore {
         if (toolName === "query-tools") {
           const result = await this.rc.queryTools(toolArgs);
           this.registerTools(result.result);
+          // Temporary fix right here to reduce the amount of context for each prompt.
+          // may need to fix the rawResult ot actually just be a description of what happened, as the actual tool data is already being passed
+          // to the LLM create message function so this is unecessary.
+          const toolNames = result.result
+            .map((tool) => tool.tool.name)
+            .join(", ");
           return {
-            rawResult: result.rawResult,
+            rawResult: `successfully added ${toolNames} tools. These tools are now available for use.`,
           };
         } else if (toolName === "list-tools") {
           const result = await this.rc.listTools(toolArgs);
