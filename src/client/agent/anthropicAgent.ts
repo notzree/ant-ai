@@ -9,11 +9,6 @@ if (!ANTHROPIC_API_KEY) {
   throw new Error("ANTHROPIC_API_KEY is not set");
 }
 
-/*
-"When you have completed all steps of a task and no further action is needed, include 'TASK COMPLETE' or 'FINAL ANSWER' in your response. " +
-"If you need specific information from the user to proceed (like API keys, authorization, or clarification), include 'NEED_USER_INPUT:' followed by your specific request.",
-*/
-
 export class AnthropicAgent implements Agent {
   public systemPrompt: string;
   public model: string;
