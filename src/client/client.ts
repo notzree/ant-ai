@@ -1,8 +1,6 @@
 import readline from "readline/promises";
-import { BufferMemory } from "langchain/memory";
 import { ToolStore } from "./toolbox/toolbox";
 import { type ConnectionOptions } from "../shared/connector/connector";
-import { BaseMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
 import { RegistryClient } from "../registry/registryClient";
 import fs from "fs";
 import path from "path";
@@ -18,25 +16,23 @@ import {
   UserInputBlock,
   FinalResponseBlock,
   type Conversation,
+  ExceptionBlock,
 } from "../shared/messages/messages";
+import type { Memory } from "./memory/memory";
 
 const ANT_VERSION = process.env.ANT_VERSION || "1.0.0";
 const MAX_RECURSION_DEPTH = 10; // Maximum number of re-evaluations
 
 export class AntClient {
-  private memory: BufferMemory;
+  private memory: Memory;
   private toolStore: ToolStore;
   private agent: Agent;
-  private chatHistory: BaseMessage[] = [];
   private logFile: string;
   private logStream: fs.WriteStream;
 
-  constructor(agent: Agent, rc: RegistryClient) {
+  constructor(agent: Agent, rc: RegistryClient, mem: Memory) {
     this.agent = agent;
-    this.memory = new BufferMemory({
-      memoryKey: "chat_history",
-      returnMessages: true,
-    });
+    this.memory = mem;
     this.toolStore = new ToolStore(rc);
     // Create log file with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -76,14 +72,15 @@ export class AntClient {
    * Process a user query, potentially recursively if new tools are discovered
    * @param query The user's query
    * @param recursionDepth Current recursion depth (default: 0)
-   * @param previousMessages Previous conversation messages (optional)
+   * @param messages Previous conversation messages (optional)
    * @returns The final response after all processing stages
    */
   async processQuery(
     query: string,
     recursionDepth: number = 0,
-    previousMessages: Conversation = [],
+    messages: Conversation = [],
   ): Promise<Conversation> {
+    var processedMessages: Message = new Message(MessageRole.ASSISTANT, []);
     try {
       this.log(
         `Processing query at recursion depth ${recursionDepth}: ${query}`,
@@ -93,36 +90,23 @@ export class AntClient {
       if (recursionDepth >= MAX_RECURSION_DEPTH) {
         const depthMessage = `[Maximum re-evaluation depth reached (${MAX_RECURSION_DEPTH}). Finalizing response.]`;
         this.log(depthMessage);
-        previousMessages[-1]?.addContent(new TextBlock(depthMessage, true));
-        return previousMessages;
+        messages[-1]?.addContent(new TextBlock(depthMessage, true));
+        return messages;
       }
 
       // Prepare conversation messages
-      let messages: Conversation;
       if (recursionDepth === 0) {
-        // Initial execution: load from memory and create messages
-        const memoryResult = await this.memory.loadMemoryVariables({});
-        const chatHistoryMessages = memoryResult.chat_history || [];
-
-        // Convert chat history to Conversation / Message format
-        messages = [
-          ...chatHistoryMessages.map((msg: BaseMessage) => ({
-            role: msg.getType() === "human" ? "user" : "assistant",
-            content: msg.content,
-          })),
+        messages = await this.memory.load();
+        messages.push(
           new Message(MessageRole.USER, [new TextBlock(query, true)]),
-        ];
-
-        // Add the user's query to chat history on first execution only
-        this.chatHistory.push(new HumanMessage(query));
+        );
         this.log(`Added user query to chat history: ${query}`);
       } else {
-        // For recursion: use provided messages and add re-evaluation instruction
+        // For recursion: use prev messages and add re-evaluation instruction
         const reEvalPrompt = `New messages have been added since your last response. There could be new context, or tools that have been added. Please re-evaluate the original query with your expanded knowledge set. (recursion level: ${recursionDepth}): "${query}"`;
-        messages = [
-          ...previousMessages,
+        messages.push(
           new Message(MessageRole.USER, [new TextBlock(reEvalPrompt, false)]),
-        ];
+        );
       }
 
       // Get current available tools count
@@ -139,7 +123,6 @@ export class AntClient {
         this.toolStore.getAvailableTools(),
       );
 
-      const processedMessages: Message = new Message(MessageRole.ASSISTANT, []);
       for (const message of newMessages) {
         if (message.role != MessageRole.ASSISTANT) {
           this.log(
@@ -153,10 +136,19 @@ export class AntClient {
           } else if (content.type === ContentBlockType.TOOL_USE) {
             try {
               const toolUseBlock = content as ToolUseBlock;
-              const resultBlock =
+              processedMessages.addContent(toolUseBlock);
+              this.log(toolUseBlock.toString());
+              const toolResultBlock =
                 await this.toolStore.executeTool(toolUseBlock);
-              processedMessages.addContent(resultBlock);
+              //tool result block must be in a user message
+              const toolMessage = new Message(MessageRole.USER, [
+                toolResultBlock,
+              ]);
+              messages = messages.concat(processedMessages);
+              messages = messages.concat(toolMessage);
+              processedMessages = new Message(MessageRole.ASSISTANT, []);
             } catch (error) {
+              processedMessages.addContent(new ExceptionBlock(error as string));
               //todo: figure out informing LLM that tool call failed later
               console.error(`Error executing tool: ${error}`);
               continue;
@@ -169,7 +161,7 @@ export class AntClient {
             // what happens if there are more blocks after this? (tbh idt this will happen but should handle the case)
             const userInputBlock = content as UserInputBlock;
             processedMessages.addContent(content);
-            return previousMessages.concat(processedMessages);
+            return messages.concat(processedMessages);
             processedMessages.addContent(content);
           } else if (content.type === ContentBlockType.THINKING) {
             processedMessages.addContent(content);
@@ -177,22 +169,25 @@ export class AntClient {
             const finalResponseBlock = content as FinalResponseBlock;
             processedMessages.addContent(finalResponseBlock);
             // nothing left to do if final response
-            return previousMessages.concat(processedMessages);
+            return messages.concat(processedMessages);
           }
         }
       }
       // if we havent exited here, then its time to recursively call again
-      return this.processQuery(
-        query,
-        recursionDepth + 1,
-        previousMessages.concat(processedMessages),
-      );
+      if (processedMessages.content.length > 0) {
+        messages = messages.concat(processedMessages);
+      }
+      return this.processQuery(query, recursionDepth + 1, messages);
     } catch (error) {
       //TODO: Improve error handling here, need to add an errorblock.
       const errorMsg = `Error processing query (recursion depth ${recursionDepth}): ${error?.message}`;
-      console.error(errorMsg);
       this.log(errorMsg);
-      return previousMessages;
+      if (processedMessages.content.length > 0) {
+        messages = messages.concat(processedMessages);
+      }
+      return messages.concat(
+        new Message(MessageRole.SYSTEM, [new ExceptionBlock(errorMsg)]),
+      );
     }
   }
 
@@ -214,28 +209,32 @@ export class AntClient {
         }
         this.log(`Received user query: ${message}`);
 
-        // Process the query with new implementation
         const conversationMessages = await this.processQuery(message);
-
         // Extract user-facing content for display
         let userResponse = "";
         for (const message of conversationMessages) {
-          if (message.role === MessageRole.ASSISTANT) {
-            for (const block of message.content) {
-              if (block.userFacing) {
-                if (block.type === ContentBlockType.TEXT) {
-                  userResponse += (block as TextBlock).text + "\n";
-                } else if (block.type === ContentBlockType.FINAL_RESPONSE) {
-                  userResponse += (block as FinalResponseBlock).response + "\n";
-                }
-                // Handle other user-facing block types as needed
+          if (message.role === MessageRole.SYSTEM) {
+            userResponse += `System message: \n`;
+          }
+          for (const block of message.content) {
+            console.warn(block.userFacing, block.type);
+            if (block.userFacing) {
+              if (block.type === ContentBlockType.TEXT) {
+                userResponse += (block as TextBlock).text + "\n";
+              } else if (block.type === ContentBlockType.FINAL_RESPONSE) {
+                userResponse += (block as FinalResponseBlock).response + "\n";
+              } else if (block.type === ContentBlockType.TOOL_USE) {
+                userResponse += `Calling...${(block as ToolUseBlock).name + "\n"}`;
+              } else if (block.type === ContentBlockType.EXCEPTION) {
+                userResponse += `Error: ${(block as ExceptionBlock).message + "\n"}`;
               }
+              // Handle other user-facing block types as needed
             }
           }
         }
 
         // Log full conversation but show clean response to user
-        this.log(`Full conversation: ${JSON.stringify(conversationMessages)}`);
+        this.log(`${JSON.stringify(conversationMessages)}`);
         console.log("\n" + userResponse.trim());
 
         // TODO: Save to memory when implemented
