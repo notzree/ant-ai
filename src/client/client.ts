@@ -227,6 +227,8 @@ export class AntClient {
                 userResponse += `Calling...${(block as ToolUseBlock).name + "\n"}`;
               } else if (block.type === ContentBlockType.EXCEPTION) {
                 userResponse += `Error: ${(block as ExceptionBlock).message + "\n"}`;
+              } else if (block.type === ContentBlockType.USER_INPUT) {
+                userResponse += `User input: ${(block as UserInputBlock).request + "\n"}`;
               }
               // Handle other user-facing block types as needed
             }

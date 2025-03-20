@@ -334,7 +334,17 @@ export class FinalResponseBlock extends BaseContentBlock {
   }
 
   static fromAnthropic(block: TextBlockParam): FinalResponseBlock {
-    return new FinalResponseBlock(block.text, {
+    let finalResponse = "";
+    const responsePattern = /FINAL_RESPONSE:?\s*(.+?)(?=\n\n|\n$|$)/s;
+    const match = block.text.match(responsePattern);
+
+    if (match && match[1]) {
+      finalResponse = match[1].trim();
+    } else {
+      finalResponse = block.text.replace(/FINAL_RESPONSE:?/g, "").trim();
+    }
+
+    return new FinalResponseBlock(finalResponse, {
       cache_control: block.cache_control,
       citations: block.citations,
     });
