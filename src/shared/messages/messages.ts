@@ -10,21 +10,78 @@ import type {
   ThinkingBlockParam,
 } from "@anthropic-ai/sdk/src/resources/index.js";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
-export enum MessageRole {
-  SYSTEM = "system",
-  USER = "user",
-  ASSISTANT = "assistant",
+
+export type Conversation = Array<Message>;
+
+export class Message {
+  content: Array<ContentBlock>;
+  role: MessageRole;
+
+  constructor(role: MessageRole, content: Array<ContentBlock> = []) {
+    this.content = content;
+    this.role = role;
+  }
+
+  addContent(content: ContentBlock) {
+    this.content.push(content);
+  }
+
+  toAnthropicMessageParam(): MessageParam {
+    const anthropicRole =
+      this.role === MessageRole.ASSISTANT ? "assistant" : "user";
+    return {
+      content: this.content.map((block) => block.toAnthropic()),
+      role: anthropicRole,
+    };
+  }
+  static fromAnthropicMessage(message: AnthropicMessage): Message {
+    const content = message.content.map((content) => {
+      if (content.type === "text") {
+        if (content.text.includes(ContentBlockType.USER_INPUT.valueOf())) {
+          // if text block includes request for user input
+          return UserInputBlock.fromAnthropic(content);
+        }
+        if (content.text.includes(ContentBlockType.FINAL_RESPONSE.valueOf())) {
+          // if text block includes final answer identifier.
+          return FinalResponseBlock.fromAnthropic(content);
+        }
+        return TextBlock.fromAnthropic(content);
+      } else if (content.type === "tool_use") {
+        return ToolUseBlock.fromAnthropic(content);
+      } else if (content.type === "thinking") {
+        // combine thinking and text blocks for now
+        return ThinkingBlock.fromAnthropic(content);
+      }
+      throw new Error(`Unknown content type: ${content.type}`);
+    });
+    return new Message(
+      message.role === "assistant" ? MessageRole.ASSISTANT : MessageRole.USER,
+      content,
+    );
+  }
+  toStrings(): string[] {
+    return this.content.map((block) => block.toString());
+  }
+  toLangChainMem(): HumanMessage | AIMessage {
+    if (this.role === MessageRole.ASSISTANT) {
+      return new AIMessage(this.toStrings().join("\n"));
+    } else {
+      return new HumanMessage(this.toStrings().join("\n"));
+    }
+  }
 }
 
-export enum ContentBlockType {
-  TEXT = "TEXT",
-  USER_INPUT = "NEED_USER_INPUT",
-  TOOL_USE = "TOOL_USE",
-  TOOL_RESULT = "TOOL_RESULT",
-  THINKING = "THINKING",
-  FINAL_RESPONSE = "FINAL_RESPONSE",
-  EXCEPTION = "EXCEPTION",
-}
+// Union type for all content block classes
+// TODO: Add: Image / Media block, Add ThinkingBlock (potentially)
+//
+export type ContentBlock =
+  | TextBlock
+  | ToolUseBlock
+  | ToolResultBlock
+  | ThinkingBlock
+  | UserInputBlock
+  | FinalResponseBlock
+  | ExceptionBlock;
 
 // Abstract base class for all content blocks
 export abstract class BaseContentBlock {
@@ -319,73 +376,18 @@ export class ExceptionBlock extends BaseContentBlock {
   }
 }
 
-// Union type for all content block classes
-// TODO: Add: Image / Media block, Add ThinkingBlock (potentially)
-//
-export type ContentBlock =
-  | TextBlock
-  | ToolUseBlock
-  | ToolResultBlock
-  | ThinkingBlock
-  | UserInputBlock
-  | FinalResponseBlock
-  | ExceptionBlock;
-export type Conversation = Array<Message>;
+export enum MessageRole {
+  SYSTEM = "system",
+  USER = "user",
+  ASSISTANT = "assistant",
+}
 
-export class Message {
-  content: Array<ContentBlock>;
-  role: MessageRole;
-
-  constructor(role: MessageRole, content: Array<ContentBlock> = []) {
-    this.content = content;
-    this.role = role;
-  }
-
-  addContent(content: ContentBlock) {
-    this.content.push(content);
-  }
-
-  toAnthropicMessageParam(): MessageParam {
-    const anthropicRole =
-      this.role === MessageRole.ASSISTANT ? "assistant" : "user";
-    return {
-      content: this.content.map((block) => block.toAnthropic()),
-      role: anthropicRole,
-    };
-  }
-  static fromAnthropicMessage(message: AnthropicMessage): Message {
-    const content = message.content.map((content) => {
-      if (content.type === "text") {
-        if (content.text.includes(ContentBlockType.USER_INPUT.valueOf())) {
-          // if text block includes request for user input
-          return UserInputBlock.fromAnthropic(content);
-        }
-        if (content.text.includes(ContentBlockType.FINAL_RESPONSE.valueOf())) {
-          // if text block includes final answer identifier.
-          return FinalResponseBlock.fromAnthropic(content);
-        }
-        return TextBlock.fromAnthropic(content);
-      } else if (content.type === "tool_use") {
-        return ToolUseBlock.fromAnthropic(content);
-      } else if (content.type === "thinking") {
-        // combine thinking and text blocks for now
-        return ThinkingBlock.fromAnthropic(content);
-      }
-      throw new Error(`Unknown content type: ${content.type}`);
-    });
-    return new Message(
-      message.role === "assistant" ? MessageRole.ASSISTANT : MessageRole.USER,
-      content,
-    );
-  }
-  toStrings(): string[] {
-    return this.content.map((block) => block.toString());
-  }
-  toLangChainMem(): HumanMessage | AIMessage {
-    if (this.role === MessageRole.ASSISTANT) {
-      return new AIMessage(this.toStrings().join("\n"));
-    } else {
-      return new HumanMessage(this.toStrings().join("\n"));
-    }
-  }
+export enum ContentBlockType {
+  TEXT = "TEXT",
+  USER_INPUT = "NEED_USER_INPUT",
+  TOOL_USE = "TOOL_USE",
+  TOOL_RESULT = "TOOL_RESULT",
+  THINKING = "THINKING",
+  FINAL_RESPONSE = "FINAL_RESPONSE",
+  EXCEPTION = "EXCEPTION",
 }
