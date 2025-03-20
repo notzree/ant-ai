@@ -1,14 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type {
-  CallToolResult,
-  Tool as MCPTool,
-} from "@modelcontextprotocol/sdk/types.js";
+import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
 import {
   Connector,
   type ConnectionOptions,
 } from "../../shared/connector/connector";
 import { LRUCache } from "lru-cache";
-import { MCPServer } from "../../shared/mcpServer/server";
 import { TextBlock, ToolResultBlock } from "../../shared/messages/messages";
 import type { RegistryClient } from "../../registry/registryClient";
 import type { ToolWithServerInfo } from "../../shared/tools/tool";
@@ -19,11 +15,6 @@ export type UntypedMCPArgs =
       [x: string]: unknown;
     }
   | undefined;
-
-// Define a type for tool execution result
-// export interface ToolExecutionResult {
-//   rawResult: any;
-// }
 
 // Store server information for a tool
 interface ToolServerInfo {

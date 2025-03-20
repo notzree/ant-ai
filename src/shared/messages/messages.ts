@@ -9,7 +9,7 @@ import type {
   CacheControlEphemeral,
   ThinkingBlockParam,
 } from "@anthropic-ai/sdk/src/resources/index.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 export enum MessageRole {
   SYSTEM = "system",
   USER = "user",
@@ -23,6 +23,7 @@ export enum ContentBlockType {
   TOOL_RESULT = "TOOL_RESULT",
   THINKING = "THINKING",
   FINAL_RESPONSE = "FINAL_RESPONSE",
+  EXCEPTION = "EXCEPTION",
 }
 
 // Abstract base class for all content blocks
@@ -54,7 +55,8 @@ export class TextBlock extends BaseContentBlock {
     metadata: Record<string, unknown> = {},
   ) {
     super(ContentBlockType.TEXT, userFacing, metadata);
-    this.text = text;
+    // Convert to string if it's not already a string
+    this.text = typeof text === "string" ? text : JSON.stringify(text);
   }
 
   toAnthropic(): TextBlockParam {
@@ -71,6 +73,12 @@ export class TextBlock extends BaseContentBlock {
       cache_control: content.cache_control,
       citations: content.citations,
     });
+  }
+
+  toString(): string {
+    return typeof this.text === "string"
+      ? this.text
+      : JSON.stringify(this.text);
   }
 }
 
@@ -112,11 +120,16 @@ export class ToolUseBlock extends BaseContentBlock {
         (this.metadata["cache_control"] as CacheControlEphemeral) || null,
     };
   }
+
   static fromAnthropic(content: ToolUseBlockParam): ToolUseBlock {
     //TODO: Figure out if we want to show user tool use block
     return new ToolUseBlock(content.id, content.name, content.input, true, {
       cache_control: content.cache_control,
     });
+  }
+
+  toString(): string {
+    return `Tool Use: ${this.name} (ID: ${this.id}), Args: ${JSON.stringify(this.args)}`;
   }
 }
 
@@ -136,6 +149,7 @@ export class ToolResultBlock extends BaseContentBlock {
     this.content = content;
     this.isError = isError;
   }
+
   toAnthropic(): ToolResultBlockParam {
     return {
       type: "tool_result",
@@ -146,6 +160,7 @@ export class ToolResultBlock extends BaseContentBlock {
       is_error: this.isError,
     };
   }
+
   static fromAnthropic(content: ToolResultBlockParam): ToolResultBlock {
     let ourContent: Array<TextBlock>;
     if (!content.content || !Array.isArray(content.content)) {
@@ -165,11 +180,16 @@ export class ToolResultBlock extends BaseContentBlock {
       content.tool_use_id,
       ourContent,
       false,
-      {
-        cache_control: content.cache_control,
-      },
       content.is_error || false,
+      {
+        cache_control: (content.cache_control as CacheControlEphemeral) || null,
+      },
     );
+  }
+
+  toString(): string {
+    const contentStr = this.content.map((block) => String(block)).join("\n");
+    return `Tool Result (ID: ${this.toolUseId})${this.isError ? " [ERROR]" : ""}:\n${contentStr}`;
   }
   // Todo: If i can figure out mcp bum ahh typing we can implement
   // fromMCP function. Instead, its messy af inside the toolbox.ts right now.
@@ -183,6 +203,7 @@ export class ThinkingBlock extends BaseContentBlock {
     this.thinking = thinking;
     this.signature = signature;
   }
+
   toAnthropic(): ContentBlockParam {
     return {
       type: "thinking",
@@ -190,8 +211,13 @@ export class ThinkingBlock extends BaseContentBlock {
       signature: this.signature,
     };
   }
+
   static fromAnthropic(block: ThinkingBlockParam): ThinkingBlock {
     return new ThinkingBlock(block.signature, block.thinking);
+  }
+
+  toString(): string {
+    return `Thinking (${this.signature}): ${this.thinking}`;
   }
 }
 
@@ -201,6 +227,7 @@ export class UserInputBlock extends BaseContentBlock {
     super(ContentBlockType.USER_INPUT, true, metadata);
     this.request = request;
   }
+
   toAnthropic(): ContentBlockParam {
     return {
       type: "text",
@@ -210,6 +237,7 @@ export class UserInputBlock extends BaseContentBlock {
       citations: this.metadata.citations as TextCitationParam[],
     };
   }
+
   static fromAnthropic(block: TextBlockParam): UserInputBlock {
     let userRequest = "";
     const requestPattern = /NEED_USER_INPUT:?\s*(.+?)(?=\n\n|\n$|$)/s;
@@ -225,6 +253,10 @@ export class UserInputBlock extends BaseContentBlock {
       citations: block.citations,
     });
   }
+
+  toString(): string {
+    return this.request;
+  }
 }
 
 export class FinalResponseBlock extends BaseContentBlock {
@@ -233,7 +265,8 @@ export class FinalResponseBlock extends BaseContentBlock {
     super(ContentBlockType.FINAL_RESPONSE, true, metadata);
     this.response = response;
   }
-  toAnthropic(): ContentBlockParam {
+
+  toAnthropic(): TextBlockParam {
     return {
       type: "text",
       text: this.response,
@@ -242,11 +275,47 @@ export class FinalResponseBlock extends BaseContentBlock {
       citations: this.metadata.citations as TextCitationParam[],
     };
   }
+
   static fromAnthropic(block: TextBlockParam): FinalResponseBlock {
     return new FinalResponseBlock(block.text, {
       cache_control: block.cache_control,
       citations: block.citations,
     });
+  }
+
+  toString(): string {
+    return this.response;
+  }
+}
+
+//TODO: consider adding different types of excpetins
+//ie: exception from MCP server, exception from client, etc
+export class ExceptionBlock extends BaseContentBlock {
+  message: string;
+  constructor(message: string, metadata: Record<string, unknown> = {}) {
+    super(ContentBlockType.EXCEPTION, true, metadata);
+    this.message = message;
+  }
+
+  toAnthropic(): TextBlockParam {
+    return {
+      type: "text",
+      text: this.message,
+      cache_control:
+        (this.metadata.cache_control as CacheControlEphemeral) || null,
+      citations: this.metadata.citations as TextCitationParam[],
+    };
+  }
+
+  static fromAnthropic(block: TextBlockParam): ExceptionBlock {
+    return new ExceptionBlock(block.text, {
+      cache_control: block.cache_control,
+      citations: block.citations,
+    });
+  }
+
+  toString(): string {
+    return `Exception: ${this.message}`;
   }
 }
 
@@ -259,7 +328,8 @@ export type ContentBlock =
   | ToolResultBlock
   | ThinkingBlock
   | UserInputBlock
-  | FinalResponseBlock;
+  | FinalResponseBlock
+  | ExceptionBlock;
 export type Conversation = Array<Message>;
 
 export class Message {
@@ -308,76 +378,14 @@ export class Message {
       content,
     );
   }
+  toStrings(): string[] {
+    return this.content.map((block) => block.toString());
+  }
+  toLangChainMem(): HumanMessage | AIMessage {
+    if (this.role === MessageRole.ASSISTANT) {
+      return new AIMessage(this.toStrings().join("\n"));
+    } else {
+      return new HumanMessage(this.toStrings().join("\n"));
+    }
+  }
 }
-
-// export interface Message {
-//   id: string;
-//   role: MessageRole;
-//   content: ContentBlock[];
-//   createdAt: string;
-//   metadata?: Record<string, unknown>;
-
-//   // Add a method to the interface
-//   toAnthropic(): AnthropicMessage;
-// }
-
-// // Implementation of Message as a class
-// export class MessageImpl implements Message {
-//   id: string;
-//   role: MessageRole;
-//   content: ContentBlock[];
-//   createdAt: string;
-//   metadata?: Record<string, unknown>;
-
-//   constructor(
-//     id: string,
-//     role: MessageRole,
-//     content: ContentBlock[],
-//     createdAt: string,
-//     metadata?: Record<string, unknown>,
-//   ) {
-//     this.id = id;
-//     this.role = role;
-//     this.content = content;
-//     this.createdAt = createdAt;
-//     this.metadata = metadata;
-//   }
-
-//   toAnthropic(): AnthropicMessage {
-//     return {
-//       role: this.role,
-//       content: this.content.map((block) => block.toAnthropic()),
-//       // Add any other fields needed for Anthropic's message format
-//     };
-//   }
-// }
-
-// export function fromAnthropicMessage(message: AnthropicMessage): Message {
-//   // Implementation would depend on Anthropic's message format
-//   // This is a placeholder
-//   const content: ContentBlock[] = message.content.map((block) => {
-//     switch (block.type) {
-//       case ContentBlockType.TEXT:
-//         return new TextBlock(
-//           block.text as string,
-//           new Date().toISOString(),
-//           true,
-//         );
-//       // Handle other block types similarly
-//       default:
-//         throw new Error(`Unsupported content block type: ${block.type}`);
-//     }
-//   });
-
-//   return new MessageImpl(
-//     crypto.randomUUID(), // Generate an ID
-//     message.role as MessageRole,
-//     content,
-//     new Date().toISOString(),
-//   );
-// }
-
-// // Helper to convert to Anthropic message format - simplified version
-// export function toAnthropicMessage(message: Message): AnthropicMessage {
-//   return message.toAnthropic();
-// }
