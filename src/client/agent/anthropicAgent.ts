@@ -9,6 +9,9 @@ if (!ANTHROPIC_API_KEY) {
   throw new Error("ANTHROPIC_API_KEY is not set");
 }
 
+/*
+  AnthropicAgent implements the Agent interface.
+*/
 export class AnthropicAgent implements Agent {
   public systemPrompt: string;
   public model: string;
@@ -25,7 +28,6 @@ export class AnthropicAgent implements Agent {
     conversation: Conversation,
     tools?: MCPTool[],
   ): Promise<Conversation> {
-    // convert ant types to anthropic types
     const anthropicMessages = conversation.map((message) =>
       message.toAnthropicMessageParam(),
     );
