@@ -1,15 +1,29 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
-import { Connector, type ConnectionOptions } from "../connector/connector";
+import type {
+  CallToolResult,
+  Tool as MCPTool,
+} from "@modelcontextprotocol/sdk/types.js";
+import {
+  Connector,
+  type ConnectionOptions,
+} from "../../shared/connector/connector";
 import { LRUCache } from "lru-cache";
-import { MCPServer } from "../mcpServer/server";
+import { MCPServer } from "../../shared/mcpServer/server";
+import { TextBlock, ToolResultBlock } from "../../shared/messages/messages";
 import type { RegistryClient } from "../../registry/registryClient";
-import type { ToolWithServerInfo } from "./tool";
+import type { ToolWithServerInfo } from "../../shared/tools/tool";
+import type { ToolUseBlock } from "../../shared/messages/messages";
+
+export type UntypedMCPArgs =
+  | {
+      [x: string]: unknown;
+    }
+  | undefined;
 
 // Define a type for tool execution result
-export interface ToolExecutionResult {
-  rawResult: any;
-}
+// export interface ToolExecutionResult {
+//   rawResult: any;
+// }
 
 // Store server information for a tool
 interface ToolServerInfo {
@@ -26,7 +40,7 @@ export class ToolStore {
 
   // All available tools (including those without connected clients)
   // private availableTools: Tool[] = [];
-  private availableTools: Map<string, Tool> = new Map();
+  private availableTools: Map<string, MCPTool> = new Map();
 
   // Maps from tool name -> server info (for lazy connection)
   private toolServerInfo = new Map<string, ToolServerInfo>();
@@ -69,14 +83,14 @@ export class ToolStore {
   /**
    * Get all available tools
    */
-  getAvailableTools(): Tool[] {
+  getAvailableTools(): MCPTool[] {
     return [...this.availableTools.values(), ...this.rc.registryTools];
   }
 
   /**
    * Connect to an MCP server and register its tools immediately
    */
-  async connectToServer(opts: ConnectionOptions): Promise<Tool[]> {
+  async connectToServer(opts: ConnectionOptions): Promise<MCPTool[]> {
     try {
       // Use cache key for consistency with ensureClientConnection
       const cacheKey = `${opts.url}::${opts.type}`;
@@ -95,9 +109,49 @@ export class ToolStore {
       const newTools = toolsResult.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        input_schema: tool.inputSchema,
+        inputSchema: tool.inputSchema,
       }));
 
+      // Check for conflicts before adding any tools
+      // WARNING: not 100% sure if MCP guarantees unique tool names across servers.
+      // may need to implement some sorta severname + toolname thing down the line.
+      const conflicts: Array<{
+        toolName: string;
+        existingServer: string;
+        newServer: string;
+      }> = [];
+
+      for (const tool of newTools) {
+        // Check if this tool name already exists and comes from a different server
+        if (this.toolServerInfo.has(tool.name)) {
+          const existingServerInfo = this.toolServerInfo.get(tool.name);
+
+          if (existingServerInfo && existingServerInfo.serverUrl !== opts.url) {
+            conflicts.push({
+              toolName: tool.name,
+              existingServer: existingServerInfo.serverUrl,
+              newServer: opts.url,
+            });
+          }
+        }
+      }
+
+      // If there are conflicts, throw a detailed error
+      if (conflicts.length > 0) {
+        const conflictDetails = conflicts
+          .map(
+            (c) =>
+              `Tool "${c.toolName}" already exists from server "${c.existingServer}"`,
+          )
+          .join("\n");
+
+        throw new Error(
+          `Tool name conflicts detected when connecting to ${opts.url}:\n${conflictDetails}\n` +
+            `Tools must have unique names across all servers.`,
+        );
+      }
+
+      // No conflicts, safe to register the tools
       for (const tool of newTools) {
         // Store server info for these tools
         this.toolServerInfo.set(tool.name, {
@@ -119,15 +173,13 @@ export class ToolStore {
       throw e;
     }
   }
-
   /**
    * Register tools without immediately connecting to their servers
    * @param toolsWithServerInfo Array of tools with their server information
    * @returns Array of registered tools
    */
-  //TODO TODAY: Implement tool deduplication
-  registerTools(toolsWithServerInfo: ToolWithServerInfo[]): Tool[] {
-    const newTools: Tool[] = [];
+  registerTools(toolsWithServerInfo: ToolWithServerInfo[]): MCPTool[] {
+    const newTools: MCPTool[] = [];
 
     // Process each tool with its server info
     for (const { tool, server } of toolsWithServerInfo) {
@@ -191,10 +243,11 @@ export class ToolStore {
    * Execute a tool by name with given arguments
    * Lazily connects to the server if needed
    */
-  async executeTool(
-    toolName: string,
-    toolArgs: any,
-  ): Promise<ToolExecutionResult> {
+  async executeTool(block: ToolUseBlock): Promise<ToolResultBlock> {
+    const toolUseId = block.id;
+    const toolName = block.name;
+    const toolArgs = block.args as { [x: string]: unknown } | undefined;
+
     if (this.rc.Tools().has(toolName)) {
       try {
         // Handle special registry tools that we need to process
@@ -211,33 +264,51 @@ export class ToolStore {
           const toolNames = result.result
             .map((tool) => tool.tool.name)
             .join(", ");
-          return {
-            rawResult: `successfully added ${toolNames} tools. These tools are now available for use.`,
-          };
+          return new ToolResultBlock(
+            toolUseId,
+            [
+              new TextBlock(
+                `successfully queried and added ${toolNames}`,
+                false,
+              ),
+            ],
+            false,
+            false,
+          );
         } else if (toolName === "list-tools") {
           const result = await this.rc.listTools(toolArgs);
-          return {
-            rawResult: result.rawResult,
-          };
-        } else if (toolName === "add-tool") {
-          const result = await this.rc.addTool(toolArgs.tool);
-          return {
-            rawResult: result.rawResult,
-          };
-        } else if (toolName === "add-server") {
-          const result = await this.rc.addServer(
-            toolArgs.serverUrl,
-            toolArgs.type,
+          return new ToolResultBlock(
+            toolUseId,
+            [new TextBlock(result.rawResult, false)],
+            false,
+            false,
           );
-          return {
-            rawResult: result.rawResult,
-          };
+        } else if (toolName === "add-tool") {
+          const result = await this.rc.addTool(toolArgs);
+          return new ToolResultBlock(
+            toolUseId,
+            [new TextBlock(result.rawResult, false)],
+            false,
+            false,
+          );
+        } else if (toolName === "add-server") {
+          const result = await this.rc.addServer(toolArgs);
+          return new ToolResultBlock(
+            toolUseId,
+            [new TextBlock(result.rawResult, false)],
+            false,
+            false,
+          );
         } else if (toolName === "delete-tool") {
-          const result = await this.rc.deleteTool(toolArgs.name);
-          return {
-            rawResult: result.rawResult,
-          };
+          const result = await this.rc.deleteTool(toolArgs);
+          return new ToolResultBlock(
+            toolUseId,
+            [new TextBlock(result.rawResult, false)],
+            false,
+            false,
+          );
         } else {
+          //TODO: do we throw here or return a result block with an error message?
           throw new Error(`Unsupported registry tool ${toolName}`);
         }
       } catch (error) {
@@ -259,9 +330,12 @@ export class ToolStore {
           throw new Error(`Client failed to handle tool ${toolName}`);
         }
 
-        return {
-          rawResult: result.content,
-        };
+        return new ToolResultBlock(
+          toolUseId,
+          [new TextBlock(result, false, result._meta)],
+          false,
+          result.isError ? true : false, //this might be wrong
+        );
       } catch (error) {
         console.error(`Error executing tool ${toolName}:`, error);
         throw error;
