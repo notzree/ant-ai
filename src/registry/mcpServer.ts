@@ -93,125 +93,125 @@ export class RegistryMcpServer {
         }
       },
     );
-    // Tool: Add multiple servers concurrently to the registry
-    this.server.tool(
-      "add-servers-concurrently",
-      "Add tools from multiple MCP servers concurrently",
-      {
-        serverStrings: z
-          .array(z.string())
-          .describe(
-            "Array of server strings in format 'url::type' where type is 'stdio' or 'sse'",
-          ),
-        authTokens: z
-          .record(z.string())
-          .optional()
-          .describe(
-            "Optional map of server URLs to their authentication tokens",
-          ),
-      },
-      async ({ serverStrings, authTokens }) => {
-        try {
-          // Convert record to Map if authTokens is provided
-          const authTokensMap = authTokens
-            ? new Map(Object.entries(authTokens))
-            : undefined;
+    // // Tool: Add multiple servers concurrently to the registry
+    // this.server.tool(
+    //   "add-servers-concurrently",
+    //   "Add tools from multiple MCP servers concurrently",
+    //   {
+    //     serverStrings: z
+    //       .array(z.string())
+    //       .describe(
+    //         "Array of server strings in format 'url::type' where type is 'stdio' or 'sse'",
+    //       ),
+    //     authTokens: z
+    //       .record(z.string())
+    //       .optional()
+    //       .describe(
+    //         "Optional map of server URLs to their authentication tokens",
+    //       ),
+    //   },
+    //   async ({ serverStrings, authTokens }) => {
+    //     try {
+    //       // Convert record to Map if authTokens is provided
+    //       const authTokensMap = authTokens
+    //         ? new Map(Object.entries(authTokens))
+    //         : undefined;
 
-          const result = await this.registry.addServersConcurrently(
-            serverStrings,
-            authTokensMap,
-          );
+    //       const result = await this.registry.addServersConcurrently(
+    //         serverStrings,
+    //         authTokensMap,
+    //       );
 
-          // Calculate total number of tools added
-          let totalTools = 0;
-          result.forEach((tools) => {
-            totalTools += tools.length;
-          });
+    //       // Calculate total number of tools added
+    //       let totalTools = 0;
+    //       result.forEach((tools) => {
+    //         totalTools += tools.length;
+    //       });
 
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(Array.from(result.entries())),
-                isJson: true,
-              },
-              {
-                type: "text",
-                text: `Added ${totalTools} tools from ${serverStrings.length} servers concurrently`,
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error adding servers concurrently:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(null),
-                isJson: true,
-              },
-              {
-                type: "text",
-                text: `Error adding servers concurrently: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-          };
-        }
-      },
-    );
+    //       return {
+    //         content: [
+    //           {
+    //             type: "text",
+    //             text: JSON.stringify(Array.from(result.entries())),
+    //             isJson: true,
+    //           },
+    //           {
+    //             type: "text",
+    //             text: `Added ${totalTools} tools from ${serverStrings.length} servers concurrently`,
+    //           },
+    //         ],
+    //       };
+    //     } catch (error) {
+    //       console.error("Error adding servers concurrently:", error);
+    //       return {
+    //         content: [
+    //           {
+    //             type: "text",
+    //             text: JSON.stringify(null),
+    //             isJson: true,
+    //           },
+    //           {
+    //             type: "text",
+    //             text: `Error adding servers concurrently: ${error instanceof Error ? error.message : String(error)}`,
+    //           },
+    //         ],
+    //       };
+    //     }
+    //   },
+    // );
 
-    // Tool: Add a server to the registry
-    this.server.tool(
-      "add-server",
-      "Add all tools from an MCP server to the registry",
-      {
-        serverString: z
-          .string()
-          .describe(
-            "Server string in format 'url::type' where type is 'stdio' or 'sse'",
-          ),
-        authToken: z
-          .string()
-          .optional()
-          .describe("Optional authentication token for the server"),
-      },
-      async ({ serverString, authToken }) => {
-        try {
-          const addedTools = await this.registry.addServer(
-            serverString,
-            authToken,
-          );
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(addedTools),
-                isJson: true,
-              },
-              {
-                type: "text",
-                text: `Added ${addedTools.length} tools from server ${serverString.split("::")[0]}`,
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error adding server:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(null),
-                isJson: true,
-              },
-              {
-                type: "text",
-                text: `Error adding server: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-          };
-        }
-      },
-    );
+    // // Tool: Add a server to the registry
+    // this.server.tool(
+    //   "add-server",
+    //   "Add all tools from an MCP server to the registry",
+    //   {
+    //     serverString: z
+    //       .string()
+    //       .describe(
+    //         "Server string in format 'url::type' where type is 'stdio' or 'sse'",
+    //       ),
+    //     authToken: z
+    //       .string()
+    //       .optional()
+    //       .describe("Optional authentication token for the server"),
+    //   },
+    //   async ({ serverString, authToken }) => {
+    //     try {
+    //       const addedTools = await this.registry.addServer(
+    //         serverString,
+    //         authToken,
+    //       );
+    //       return {
+    //         content: [
+    //           {
+    //             type: "text",
+    //             text: JSON.stringify(addedTools),
+    //             isJson: true,
+    //           },
+    //           {
+    //             type: "text",
+    //             text: `Added ${addedTools.length} tools from server ${serverString.split("::")[0]}`,
+    //           },
+    //         ],
+    //       };
+    //     } catch (error) {
+    //       console.error("Error adding server:", error);
+    //       return {
+    //         content: [
+    //           {
+    //             type: "text",
+    //             text: JSON.stringify(null),
+    //             isJson: true,
+    //           },
+    //           {
+    //             type: "text",
+    //             text: `Error adding server: ${error instanceof Error ? error.message : String(error)}`,
+    //           },
+    //         ],
+    //       };
+    //     }
+    //   },
+    // );
 
     // Tool: List all tools in the registry
     this.server.tool(
@@ -256,49 +256,49 @@ export class RegistryMcpServer {
       },
     );
 
-    // Tool: Delete a tool from the registry
-    this.server.tool(
-      "delete-tool",
-      "Delete a tool from the registry",
-      {
-        name: z.string().describe("The ID of the tool to delete"),
-      },
-      async ({ name }) => {
-        try {
-          const success = await this.registry.deleteTool(name);
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(success),
-                isJson: true,
-              },
-              {
-                type: "text",
-                text: success
-                  ? `Tool '${name}' deleted successfully.`
-                  : `Tool '${name}' not found or could not be deleted.`,
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error deleting tool:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(null),
-                isJson: true,
-              },
-              {
-                type: "text",
-                text: `Error deleting tool: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-          };
-        }
-      },
-    );
+    // // Tool: Delete a tool from the registry
+    // this.server.tool(
+    //   "delete-tool",
+    //   "Delete a tool from the registry",
+    //   {
+    //     name: z.string().describe("The ID of the tool to delete"),
+    //   },
+    //   async ({ name }) => {
+    //     try {
+    //       const success = await this.registry.deleteTool(name);
+    //       return {
+    //         content: [
+    //           {
+    //             type: "text",
+    //             text: JSON.stringify(success),
+    //             isJson: true,
+    //           },
+    //           {
+    //             type: "text",
+    //             text: success
+    //               ? `Tool '${name}' deleted successfully.`
+    //               : `Tool '${name}' not found or could not be deleted.`,
+    //           },
+    //         ],
+    //       };
+    //     } catch (error) {
+    //       console.error("Error deleting tool:", error);
+    //       return {
+    //         content: [
+    //           {
+    //             type: "text",
+    //             text: JSON.stringify(null),
+    //             isJson: true,
+    //           },
+    //           {
+    //             type: "text",
+    //             text: `Error deleting tool: ${error instanceof Error ? error.message : String(error)}`,
+    //           },
+    //         ],
+    //       };
+    //     }
+    //   },
+    // );
   }
 
   /**

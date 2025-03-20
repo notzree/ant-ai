@@ -1,7 +1,10 @@
 import dotenv from "dotenv";
 import { AntClient } from "./client/client";
 import { RegistryClient } from "./registry/registryClient";
-
+import { AnthropicAgent } from "./client/agent/anthropicAgent";
+import { DEFAULT_ANTHROPIC_PROMPT } from "./prompts";
+import { Memory } from "./client/memory/memory";
+import { InMemoryStorageBackend } from "./client/memory/storageBackend/buffermemory";
 async function main() {
   dotenv.config();
 
@@ -46,6 +49,10 @@ async function main() {
     return;
   }
 
+  // Create and initialize agent
+  const MODEL_NAME = process.env.MODEL_NAME || "claude-3-5-sonnet-20241022";
+  const agent = new AnthropicAgent(DEFAULT_ANTHROPIC_PROMPT, MODEL_NAME, 5000);
+
   // Create and initialize registry client
   const rc = new RegistryClient();
   await rc.initialize({
@@ -55,8 +62,12 @@ async function main() {
     appVersion: "1.0",
   });
 
+  // Create and initialize memory
+  const inMemoryBackend = new InMemoryStorageBackend();
+  const memory = new Memory(inMemoryBackend);
+
   // Create AntClient
-  const mcpClient = new AntClient(rc);
+  const mcpClient = new AntClient(agent, rc, memory);
 
   try {
     // Connect to the additional servers provided as arguments

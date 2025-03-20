@@ -1,4 +1,4 @@
-import type { Tool } from "@anthropic-ai/sdk/src/resources/index.js";
+import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   Connector,
@@ -6,7 +6,7 @@ import {
 } from "../shared/connector/connector";
 import { MCPServer } from "../shared/mcpServer/server";
 import type { ToolWithServerInfo } from "../shared/tools/tool";
-
+import type { UntypedMCPArgs } from "../client/toolbox/toolbox";
 /**
  * A generic type that wraps a result type with its raw JSON representation
  */
@@ -18,7 +18,7 @@ export type WithRawResult<T> = {
 export class RegistryClient {
   private connector: Connector = new Connector();
   private registry: Client | null = null;
-  public registryTools: Tool[] = [];
+  public registryTools: MCPTool[] = [];
 
   /**
    * Initialize the registry client by connecting to the registry server
@@ -44,7 +44,7 @@ export class RegistryClient {
     const convertedTools = toolsResult.tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
-      input_schema: tool.inputSchema,
+      inputSchema: tool.inputSchema,
     }));
     this.registryTools = convertedTools;
   }
@@ -58,36 +58,6 @@ export class RegistryClient {
       coveredTools.add(tool.name);
     }
     return coveredTools;
-  }
-
-  /**
-   * Execute a tool on the registry server
-   * @param toolName The name of the tool to execute
-   * @param args The arguments to pass to the tool
-   TODO: Do we even need this? This fcks up the typing
-   */
-  public async executeTool(toolName: string, args: any): Promise<any> {
-    if (!this.registry) {
-      throw new Error("Registry client not initialized");
-    }
-
-    // Check if the tool exists in the registry
-    if (!this.Tools().has(toolName)) {
-      throw new Error(`Tool '${toolName}' not found in registry`);
-    }
-
-    const result = await this.registry.callTool({
-      name: toolName,
-      arguments: args,
-    });
-
-    if (!result) {
-      throw new Error(
-        `Failed to execute tool ${toolName} with args: ${JSON.stringify(args)}`,
-      );
-    }
-
-    return result;
   }
 
   /**
@@ -112,10 +82,14 @@ export class RegistryClient {
    * @param query The search query
    * @param limit Optional maximum number of results
    */
-  public async queryTools(args: {
-    query: string;
-    limit?: number;
-  }): Promise<WithRawResult<ToolWithServerInfo[]>> {
+  public async queryTools(
+    args:
+      | {
+          query: string;
+          limit?: number;
+        }
+      | UntypedMCPArgs,
+  ): Promise<WithRawResult<ToolWithServerInfo[]>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
@@ -163,18 +137,20 @@ export class RegistryClient {
    * Add a new tool to the registry
    * @param tool The tool definition to add
    */
-  public async addTool(tool: Tool): Promise<WithRawResult<Tool>> {
+  public async addTool(
+    args: { tool: MCPTool } | UntypedMCPArgs,
+  ): Promise<WithRawResult<MCPTool>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
 
     const result = await this.registry.callTool({
       name: "add-tool",
-      arguments: { tool },
+      arguments: args,
     });
 
     if (!result) {
-      throw new Error(`Failed to add tool: ${JSON.stringify(tool)}`);
+      throw new Error(`Failed to add tool: ${JSON.stringify(args?.tool)}`);
     }
 
     try {
@@ -200,20 +176,19 @@ export class RegistryClient {
    * @param type Type of server connection (stdio or sse)
    */
   public async addServer(
-    serverUrl: string,
-    type: "stdio" | "sse",
-  ): Promise<WithRawResult<Tool[]>> {
+    args: { serverUrl: string; type: "stdio" | "sse" } | UntypedMCPArgs,
+  ): Promise<WithRawResult<MCPTool[]>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
 
     const result = await this.registry.callTool({
       name: "add-server",
-      arguments: { serverUrl, type },
+      arguments: args,
     });
 
     if (!result) {
-      throw new Error(`Failed to add server: ${serverUrl}`);
+      throw new Error(`Failed to add server: ${args?.serverUrl}`);
     }
 
     try {
@@ -237,8 +212,8 @@ export class RegistryClient {
    * List all tools in the registry
    */
   public async listTools(
-    args: any = {},
-  ): Promise<WithRawResult<{ tools: Tool[] }>> {
+    args: UntypedMCPArgs,
+  ): Promise<WithRawResult<{ tools: MCPTool[] }>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
@@ -276,18 +251,20 @@ export class RegistryClient {
    * Delete a tool from the registry
    * @param name The name of the tool to delete
    */
-  public async deleteTool(name: string): Promise<WithRawResult<boolean>> {
+  public async deleteTool(
+    args: { name: string } | UntypedMCPArgs,
+  ): Promise<WithRawResult<boolean>> {
     if (!this.registry) {
       throw new Error("Registry client not initialized");
     }
 
     const result = await this.registry.callTool({
       name: "delete-tool",
-      arguments: { name },
+      arguments: args,
     });
 
     if (!result) {
-      throw new Error(`Failed to delete tool: ${name}`);
+      throw new Error(`Failed to delete tool: ${args?.name}`);
     }
 
     try {
