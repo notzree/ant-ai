@@ -1,4 +1,4 @@
-import type { StorageBackend } from "./storage";
+import type { StorageBackend } from "./storageBackend";
 import { type Conversation } from "../../../shared/messages/messages";
 
 export class InMemoryStorageBackend implements StorageBackend {

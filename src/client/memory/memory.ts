@@ -1,5 +1,5 @@
 import type { Conversation } from "../../shared/messages/messages";
-import type { StorageBackend } from "./storageBackend/storage";
+import type { StorageBackend } from "./storageBackend/storageBackend";
 
 export class Memory {
   // can add memory compaction here.

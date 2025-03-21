@@ -104,7 +104,7 @@ export abstract class BaseContentBlock {
 }
 
 export class TextBlock extends BaseContentBlock {
-  text: string | any;
+  text: string;
 
   constructor(
     text: string | any,
@@ -112,8 +112,95 @@ export class TextBlock extends BaseContentBlock {
     metadata: Record<string, unknown> = {},
   ) {
     super(ContentBlockType.TEXT, userFacing, metadata);
+
+    // Clean and sanitize the text
+    this.text = this.sanitizeText(text);
+  }
+
+  /**
+   * Sanitizes and cleans the input text by removing unnecessary formatting
+   */
+  private sanitizeText(text: any): string {
     // Convert to string if it's not already a string
-    this.text = typeof text === "string" ? text : JSON.stringify(text);
+    let textStr = typeof text === "string" ? text : JSON.stringify(text);
+
+    // Clean up the text content to make it more readable
+    textStr = this.cleanTextContent(textStr);
+
+    return textStr;
+  }
+
+  /**
+   * Cleans text content to make it more readable by removing excessive formatting
+   */
+  private cleanTextContent(text: string): string {
+    // Skip cleaning if the text seems simple or clean already
+    if (text.length < 100 && !text.includes("<") && !text.includes("\\")) {
+      return text;
+    }
+
+    // Remove escaped backslashes (common in various exports)
+    text = text.replace(/\\\\+/g, "\\");
+
+    // Remove HTML tags
+    text = text.replace(
+      /<\/?(?:div|span|p|br|table|tr|td|th|b|i|strong|em|a|ul|ol|li|h\d)[^>]*>/gi,
+      " ",
+    );
+
+    // Remove script and style tags and their contents
+    text = text.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "");
+
+    // Remove HTML comments
+    text = text.replace(/<!--[\s\S]*?-->/g, "");
+
+    // Remove invisible characters and HTML entities
+    text = text.replace(/(&zwnj;|&nbsp;|&#8203;|&#847;|&#160;)/g, " ");
+
+    // Replace entities with their actual characters
+    text = text
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+
+    // Remove excessive whitespace
+    text = text.replace(/\s{2,}/g, " ");
+
+    // Remove excessive newlines
+    text = text.replace(/\n{3,}/g, "\n\n");
+
+    // Remove tracking codes, pixel markers, and hidden content
+    text = text.replace(/\[\[.*?\]\]/g, "");
+    text = text.replace(/\{\{.*?\}\}/g, "");
+
+    // Clean up JSON-like structures that might be overly verbose
+    text = text.replace(
+      /"content":\s*\[\s*\{\s*"type":\s*"text",\s*"text":\s*("[^"]*"|\{[^\}]*\})/g,
+      (match, p1) => {
+        // Extract just the text content
+        if (p1.startsWith('"')) {
+          return p1.substring(1, p1.length - 1);
+        }
+        return p1;
+      },
+    );
+
+    // Remove any leftover JSON format artifacts
+    text = text.replace(/",\s*"/g, " ");
+    text = text.replace(/"\s*}/g, "");
+    text = text.replace(/{\s*"/g, "");
+
+    // Handle escaped quotes
+    text = text.replace(/\\"/g, '"');
+
+    // Clean up unicode escape sequences
+    text = text.replace(/\\u([0-9a-fA-F]{4})/g, (match, p1) => {
+      return String.fromCharCode(parseInt(p1, 16));
+    });
+
+    return text.trim();
   }
 
   toAnthropic(): TextBlockParam {
@@ -125,6 +212,7 @@ export class TextBlock extends BaseContentBlock {
       citations: (this.metadata["citations"] as Array<TextCitationParam>) || [],
     };
   }
+
   static fromAnthropic(content: TextBlockParam): TextBlock {
     return new TextBlock(content.text, true, {
       cache_control: content.cache_control,
@@ -133,9 +221,7 @@ export class TextBlock extends BaseContentBlock {
   }
 
   toString(): string {
-    return typeof this.text === "string"
-      ? this.text
-      : JSON.stringify(this.text);
+    return this.text;
   }
 }
 

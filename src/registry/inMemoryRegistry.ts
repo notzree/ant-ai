@@ -1,6 +1,7 @@
 import type { Registry } from "./registry";
 import { ToolsFromClient, type ToolWithServerInfo } from "../shared/tools/tool";
-import type { Tool } from "@anthropic-ai/sdk/src/resources/index.js";
+import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/src/resources/index.js";
+import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { Document } from "langchain/document";
 import { OpenAIEmbeddings } from "@langchain/openai";
@@ -40,7 +41,7 @@ export class inMemoryRegistry implements Registry {
   public async addServersConcurrently(
     serverStrings: string[],
     authTokens?: Map<string, string>,
-  ): Promise<Map<string, Tool[]>> {
+  ): Promise<Map<string, MCPTool[]>> {
     if (!this.vectorStore) {
       throw new Error("Vector store not initialized");
     }
@@ -71,7 +72,7 @@ export class inMemoryRegistry implements Registry {
       };
     });
 
-    const results = new Map<string, Tool[]>();
+    const results = new Map<string, MCPTool[]>();
 
     // Create promises for each server addition
     const serverPromises = serverConfigs.map(async (config) => {
@@ -132,7 +133,7 @@ export class inMemoryRegistry implements Registry {
   public async addServer(
     serverString: string,
     authToken?: string,
-  ): Promise<Tool[]> {
+  ): Promise<MCPTool[]> {
     if (!this.vectorStore) {
       throw new Error("Vector store not initialized");
     }
@@ -182,7 +183,7 @@ export class inMemoryRegistry implements Registry {
    * @param server - The MCPServer the tool belongs to
    * @returns The added tool
    */
-  public async addTool(tool: Tool, server: MCPServer): Promise<Tool> {
+  public async addTool(tool: MCPTool, server: MCPServer): Promise<MCPTool> {
     if (!this.vectorStore) {
       await this.initialize();
     }
@@ -267,7 +268,7 @@ export class inMemoryRegistry implements Registry {
     }
     if (!limit) {
       // Default limit
-      limit = 6;
+      limit = 10;
     }
 
     // Perform similarity search
@@ -284,7 +285,7 @@ export class inMemoryRegistry implements Registry {
             console.error(`Server with ID ${serverId} not found`);
             return null;
           }
-          const tool = JSON.parse(doc.metadata.toolData as string) as Tool;
+          const tool = JSON.parse(doc.metadata.toolData as string) as MCPTool;
           return {
             tool: tool,
             server: mcpServer,
@@ -303,7 +304,7 @@ export class inMemoryRegistry implements Registry {
    * Get all tools
    * @returns Array of all tools
    */
-  public async listTools(): Promise<Tool[]> {
+  public async listTools(): Promise<MCPTool[]> {
     return Promise.resolve(
       Array.from(this.tools.values()).map((toolInfo) => toolInfo.tool),
     );
@@ -321,8 +322,8 @@ export class inMemoryRegistry implements Registry {
    * Get all tools grouped by server
    * @returns Map of server to tools
    */
-  public async getToolsByServer(): Promise<Map<MCPServer, Tool[]>> {
-    const serverMap = new Map<MCPServer, Tool[]>();
+  public async getToolsByServer(): Promise<Map<MCPServer, MCPTool[]>> {
+    const serverMap = new Map<MCPServer, MCPTool[]>();
 
     // Initialize empty arrays for each server
     for (const server of this.servers.values()) {
