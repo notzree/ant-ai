@@ -97,6 +97,8 @@ export class AntClient {
       // Prepare conversation messages
       if (recursionDepth === 0) {
         messages = await this.memory.load();
+        this.log(`Loaded chat history: ${messages.length} messages`);
+        this.log(messages.toString());
         messages.push(
           new Message(MessageRole.USER, [new TextBlock(query, true)]),
         );
@@ -210,6 +212,7 @@ export class AntClient {
         this.log(`Received user query: ${message}`);
 
         const conversationMessages = await this.processQuery(message);
+        await this.memory.save(conversationMessages);
         // Extract user-facing content for display
         let userResponse = "";
         for (const message of conversationMessages) {
@@ -217,7 +220,6 @@ export class AntClient {
             userResponse += `System message: \n`;
           }
           for (const block of message.content) {
-            console.warn(block.userFacing, block.type);
             if (block.userFacing) {
               if (block.type === ContentBlockType.TEXT) {
                 userResponse += (block as TextBlock).text + "\n";
