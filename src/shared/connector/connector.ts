@@ -1,17 +1,17 @@
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { WebSocketClientTransport } from './webSocketClientTransport.ts';
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { execSync } from "child_process";
 
 export type ConnectionOptions = {
-  type: "stdio" | "sse";
+  type: "sse" | "stdio" | "websocket"; // Add "websocket" here
   url: string;
-  authToken?: string;
   appName: string;
   appVersion: string;
+  authToken?: string;
 };
-
 // Connector class connects to an MCP server and returns a Client instance
 export class Connector {
   /**
@@ -31,7 +31,18 @@ export class Connector {
     if (options.type == "stdio") {
       return await this.connectToStdio(client, options.url);
     }
+    if (options.type == "websocket") {
+      return await this.connectToWebSocket(client, options.url);
+    }
+    
     throw new Error("Invalid connection type");
+  }
+
+  private async connectToWebSocket(client: Client, url: string): Promise<Client> {
+    const transport = new WebSocketClientTransport(new URL(url));
+    await transport.start();
+    client.connect(transport);
+    return client;
   }
 
   /**

@@ -5,13 +5,14 @@ import { AnthropicAgent } from "./client/agent/anthropicAgent";
 import { DEFAULT_ANTHROPIC_PROMPT } from "./prompts";
 import { Memory } from "./client/memory/memory";
 import { InMemoryStorageBackend } from "./client/memory/storageBackend/buffermemory";
+
 async function main() {
   dotenv.config();
 
   if (process.argv.length < 3) {
     console.log(
       "Usage: bun src/index.ts <registry url>::<type> [<server url>::<type> ...]\n" +
-        "Format: url::type where type is 'sse' or 'stdio'\n" +
+        "Format: url::type where type is 'sse', 'stdio', or 'websocket'\n" +
         "Example: https://registry.example.com::sse https://server1.com::sse localhost::stdio",
     );
     return;
@@ -41,7 +42,7 @@ async function main() {
   if (
     !registryUrl ||
     !registryType ||
-    !["sse", "stdio"].includes(registryType)
+    !["sse", "stdio", "websocket"].includes(registryType)
   ) {
     console.log(
       `Invalid registry argument: ${registryArg}. Format should be url::type`,
@@ -57,7 +58,7 @@ async function main() {
   const rc = new RegistryClient();
   await rc.initialize({
     url: registryUrl,
-    type: registryType as "sse" | "stdio",
+    type: registryType as "sse" | "stdio" | "websocket",
     appName: "ant-registry",
     appVersion: "1.0",
   });
@@ -86,14 +87,14 @@ async function main() {
         const url = arg.substring(0, lastDoubleColonIndex);
         const type = arg.substring(lastDoubleColonIndex + 2);
 
-        if (!url || !type || !["sse", "stdio"].includes(type)) {
+        if (!url || !type || !["sse", "stdio", "websocket"].includes(type)) {
           console.log(
             `Invalid server argument: ${arg}. Format should be url::type`,
           );
           continue;
         }
 
-        await mcpClient.connectToServer(url, type as "sse" | "stdio");
+        await mcpClient.connectToServer(url, type as "sse" | "stdio" | "websocket");
       }
     }
 

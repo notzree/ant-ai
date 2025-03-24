@@ -19,6 +19,8 @@ import {
   ExceptionBlock,
 } from "../shared/messages/messages";
 import type { Memory } from "./memory/memory";
+import WebSocket from "ws";
+import { WebSocketClientTransport } from "../shared/connector/webSocketClientTransport";
 
 const ANT_VERSION = process.env.ANT_VERSION || "1.0.0";
 const MAX_RECURSION_DEPTH = 10; // Maximum number of re-evaluations
@@ -29,6 +31,7 @@ export class AntClient {
   private agent: Agent;
   private logFile: string;
   private logStream: fs.WriteStream;
+  private wsClient: WebSocket | null = null; // ws connection
 
   constructor(agent: Agent, rc: RegistryClient, mem: Memory) {
     this.agent = agent;
@@ -49,7 +52,7 @@ export class AntClient {
     this.logStream.write(`[${timestamp}] ${message}\n`);
   }
 
-  async connectToServer(url: string, type: "sse" | "stdio") {
+  async connectToServer(url: string, type: "sse" | "stdio" | "websocket") {
     const opts: ConnectionOptions = {
       type: type,
       url: url,
@@ -58,7 +61,11 @@ export class AntClient {
     };
     try {
       this.log(`Connecting to MCP server at ${url}`);
-      this.toolStore.connectToServer(opts);
+      if (type === "websocket") { // connecting to ws
+        this.connectToWebSocket(url);
+      } else {
+        this.toolStore.connectToServer(opts);
+      }
       this.log(`Successfully connected to MCP server at ${url}`);
     } catch (e) {
       const errorMsg = `Failed to connect to MCP server ${url}: ${e}`;
@@ -66,6 +73,31 @@ export class AntClient {
       console.log(errorMsg);
       throw e;
     }
+  }
+
+  private connectToWebSocket(url: string) {
+    const transport = new WebSocketClientTransport(new URL(url));
+  
+    transport.onopen = () => {
+      this.log(`WebSocket connection opened to ${url}`);
+    };
+  
+    transport.onmessage = (message) => {
+      this.log(`Received message: ${JSON.stringify(message)}`);
+      // Handle incoming messages
+    };
+  
+    transport.onerror = (error) => {
+      this.log(`WebSocket error: ${error}`);
+    };
+  
+    transport.onclose = () => {
+      this.log(`WebSocket connection closed`);
+    };
+  
+    transport.start().catch((error) => {
+      this.log(`Failed to start WebSocket transport: ${error}`);
+    });
   }
 
   /**
@@ -178,9 +210,8 @@ export class AntClient {
         messages = messages.concat(processedMessages);
       }
       return this.processQuery(query, recursionDepth + 1, messages);
-    } catch (error) {
-      //TODO: Improve error handling here, need to add an errorblock.
-      const errorMsg = `Error processing query (recursion depth ${recursionDepth}): ${error?.message}`;
+    } catch (error: any) {
+      const errorMsg = `Error processing query (recursion depth ${recursionDepth}): ${error.message || 'Unknown error'}`;
       this.log(errorMsg);
       if (processedMessages.content.length > 0) {
         messages = messages.concat(processedMessages);
@@ -251,5 +282,8 @@ export class AntClient {
     this.log("Cleaning up resources");
     await this.toolStore.cleanup();
     this.logStream.end();
+    if (this.wsClient) {
+      this.wsClient.close();
+    }
   }
 }
