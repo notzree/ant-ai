@@ -302,11 +302,17 @@ export class inMemoryRegistry implements Registry {
 
   /**
    * Get all tools
+   * @param limit - Maximum number of results to return (default: 5)
    * @returns Array of all tools
    */
-  public async listTools(): Promise<MCPTool[]> {
+  public async listTools(limit?: number): Promise<MCPTool[]> {
+    if (limit === undefined) {
+      limit = 5;
+    }
     return Promise.resolve(
-      Array.from(this.tools.values()).map((toolInfo) => toolInfo.tool),
+      Array.from(this.tools.values())
+        .map((toolInfo) => toolInfo.tool)
+        .slice(0, limit),
     );
   }
 

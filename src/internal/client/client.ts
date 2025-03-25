@@ -210,7 +210,7 @@ export class AntClient {
           break;
         }
         this.log(`Received user query: ${message}`);
-
+        const authlinks = [];
         const conversationMessages = await this.processQuery(message);
         await this.memory.save(conversationMessages);
         // Extract user-facing content for display
@@ -220,6 +220,13 @@ export class AntClient {
             userResponse += `System message: \n`;
           }
           for (const block of message.content) {
+            if (block.type == ContentBlockType.TOOL_RESULT) {
+              for (const result of (block as ToolResultBlock).content) {
+                if (extractRedirectUrl(result.text) != null) {
+                  authlinks.push(extractRedirectUrl(result.text));
+                }
+              }
+            }
             if (block.userFacing) {
               if (block.type === ContentBlockType.TEXT) {
                 userResponse += (block as TextBlock).text + "\n";
@@ -233,6 +240,12 @@ export class AntClient {
                 userResponse += `User input: ${(block as UserInputBlock).request + "\n"}`;
               }
               // Handle other user-facing block types as needed
+            }
+            if (authlinks.length > 0) {
+              userResponse += "Authentication links:\n";
+              for (const link of authlinks) {
+                userResponse += link + "\n";
+              }
             }
           }
         }
@@ -256,4 +269,15 @@ export class AntClient {
     await this.toolStore.cleanup();
     this.logStream.end();
   }
+}
+
+function extractRedirectUrl(jsonString: string): string | null {
+  const regex = /"redirect_url":\s*"([^"]+)"/;
+  const match = jsonString.match(regex);
+
+  if (match && match[1]) {
+    return match[1];
+  }
+
+  return null;
 }

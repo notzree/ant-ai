@@ -323,13 +323,25 @@ export async function startRegistryServer(registry: Registry): Promise<void> {
 
 // Example usage (can be commented out or removed when importing this module elsewhere)
 async function main() {
+  const startTime = performance.now(); // Start timing
+
   const registry = new inMemoryRegistry();
   await registry.initialize();
   await registry.addServersConcurrently([
     "https://mcp.composio.dev/browserbase_tool/few-sticky-animal-ZVQ1XF::sse",
     "https://mcp.composio.dev/gmail/wonderful-odd-gigabyte-aJZbFe::sse",
     "https://mcp.composio.dev/googledocs/wonderful-odd-gigabyte-aJZbFe::sse",
+    "https://mcp.composio.dev/slack/rhythmic-modern-china-azC3SO::sse",
+    "https://mcp.composio.dev/github/rhythmic-modern-china-azC3SO::sse",
+    "https://mcp.composio.dev/googledrive/rhythmic-modern-china-azC3SO::sse",
+    "https://mcp.composio.dev/perplexityai/rhythmic-modern-china-azC3SO::sse",
+    "https://mcp.composio.dev/google_maps/rhythmic-modern-china-azC3SO::sse",
+    "https://mcp.composio.dev/googlemeet/rhythmic-modern-china-azC3SO::sse",
   ]);
+
+  const setupTime = performance.now() - startTime; // Calculate time taken
+  console.log(`Registry setup completed in ${setupTime.toFixed(2)}ms`);
+
   startRegistryServer(registry).catch((error) => {
     console.error("Fatal error in main():", error);
     process.exit(1);

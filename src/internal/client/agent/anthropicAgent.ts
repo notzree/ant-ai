@@ -1,5 +1,4 @@
 import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
-import { type Tool as AnthropicTool } from "@anthropic-ai/sdk/src/resources/index.js";
 import { Message, type Conversation } from "../../shared/messages/messages";
 import { type Agent } from "./agent";
 import { Anthropic } from "@anthropic-ai/sdk";

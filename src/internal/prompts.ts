@@ -10,7 +10,7 @@ export const DEFAULT_ANTHROPIC_PROMPT = `You are an AI agent designed to assist 
   1. ${ContentBlockType.USER_INPUT.valueOf()}
     ${ContentBlockType.USER_INPUT.valueOf()} RULES:
     There may be tools that require user input to function properly. This can include: API keys, authorization, or clarification. In cases like these, you should prompt the user for the necessary information.
-    You should include "${ContentBlockType.USER_INPUT.valueOf()}": followed by your specific request. If there are any authorization content such as links, you should include the content with explicit instructions on how complete the authorization process.
+    You should include "${ContentBlockType.USER_INPUT.valueOf()}": followed by your specific request. If there are any authorization content such as links, you MUST include the link with explicit instructions in your request to the user.
 
   2. ${ContentBlockType.FINAL_RESPONSE.valueOf()}
     ${ContentBlockType.FINAL_RESPONSE.valueOf()} RULES:

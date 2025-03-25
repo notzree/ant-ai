@@ -1,11 +1,11 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-// import { AntTool } from "../shared/tools/tool.js";
 import type { MCPServer } from "../shared/mcpServer/server.js";
 import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
 import type { ToolWithServerInfo } from "../shared/tools/tool.js";
+
 /**
  * Registry interface for managing AI assistant tools
- */
+ **/
 export interface Registry {
   /**
    * Query tools in the registry based on relevance to a search query
@@ -37,9 +37,10 @@ export interface Registry {
   /**
    * List all tools in the registry
    *
+   * @param limit - Maximum number of results to return (default: 5)
    * @returns Promise resolving to an array of all tools
    */
-  listTools(): Promise<MCPTool[]>;
+  listTools(limit?: number): Promise<MCPTool[]>;
 
   /**
    * Delete a tool from the registry
@@ -48,11 +49,4 @@ export interface Registry {
    * @returns Promise resolving to a boolean indicating success
    */
   deleteTool(name: string): Promise<boolean>;
-
-  /**
-   * Optional: Initialize the registry if needed
-   *
-   * @returns Promise that resolves when initialization is complete
-   */
-  initialize?(): Promise<void>;
 }
