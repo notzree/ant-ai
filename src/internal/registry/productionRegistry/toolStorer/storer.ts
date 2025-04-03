@@ -1,5 +1,6 @@
 import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
 import type { ToolWithServerInfo } from "../../../shared/tools/tool";
+
 export interface ToolStorer {
   upsertTool(tool: ToolWithServerInfo): Promise<void>;
   upsertTools(tools: ToolWithServerInfo[]): Promise<void>;
