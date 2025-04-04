@@ -1,4 +1,4 @@
-<img width="862" alt="image" src="https://github.com/user-attachments/assets/314912a5-a3b5-4f2c-ada6-51847ca2605b" /># Ant Client
+# Ant Client
 Ant is an MCP client and personal registry. You may add an unlimited number of MCP servers to the registry, and Ant will only fetch the necessary servers for your query, resulting in cheaper queries (less tool context).
 
 Features:
