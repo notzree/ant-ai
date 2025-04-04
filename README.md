@@ -1,4 +1,13 @@
-# mac
+# Ant Client
+Ant is an MCP client and personal registry. You may add an unlimited number of MCP servers to the registry, and Ant will only fetch the necessary servers for your query, resulting in cheaper queries (less tool context).
+
+Features:
+- Multiple MCP server connections with lazy loading (connections open when tools are used, not when they are initialized)
+- LRU Cache with TTL to close unused connections to save resources
+- extensible registry
+
+# Example
+
 
 To install dependencies:
 
@@ -9,10 +18,8 @@ bun install
 To run:
 
 ```bash
-bun src/index.ts src/registry/mcpServer.ts::stdio;
+bun src/internal/index.ts src/internal/registry/mcpServer.ts::stdio;
 ```
-
-This project was created using `bun init` in bun v1.2.5. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
 
 
 # QUIRKS
