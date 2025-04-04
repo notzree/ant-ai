@@ -1,4 +1,4 @@
-# Ant Client
+<img width="862" alt="image" src="https://github.com/user-attachments/assets/314912a5-a3b5-4f2c-ada6-51847ca2605b" /># Ant Client
 Ant is an MCP client and personal registry. You may add an unlimited number of MCP servers to the registry, and Ant will only fetch the necessary servers for your query, resulting in cheaper queries (less tool context).
 
 Features:
@@ -6,8 +6,10 @@ Features:
 - LRU Cache with TTL to close unused connections to save resources
 - extensible registry
 
-# Example
-
+# Example: Creating and inviting to a google meet.
+<img width="1342" alt="image" src="https://github.com/user-attachments/assets/38b66220-5e6c-4024-9a5e-021d9e0d8052" />
+<img width="1349" alt="image" src="https://github.com/user-attachments/assets/bfe85800-42d0-4d90-a740-881e88e74eca" />
+<img width="862" alt="image" src="https://github.com/user-attachments/assets/57ad4908-cff1-4119-a22b-36f064e4b0ea" />
 
 To install dependencies:
 
